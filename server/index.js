@@ -44,6 +44,7 @@ import pty from 'node-pty';
 import fetch from 'node-fetch';
 import mime from 'mime-types';
 
+import { getShellClaudeCliCommand } from './utils/claude-cli-detect.js';
 import { getProjects, getSessions, renameProject, deleteSession, deleteProject, addProjectManually, extractProjectDirectory, clearProjectDirectoryCache, searchConversations } from './projects.js';
 import { queryClaudeSDK, abortClaudeSDKSession, isClaudeSDKSessionActive, getActiveClaudeSDKSessions, resolveToolApproval, getPendingApprovalsForSession, reconnectSessionWriter } from './claude-sdk.js';
 import { spawnCursor, abortCursorSession, isCursorSessionActive, getActiveCursorSessions } from './cursor-cli.js';
@@ -62,6 +63,7 @@ import agentRoutes from './routes/agent.js';
 import projectsRoutes, { WORKSPACES_ROOT, validateWorkspacePath } from './routes/projects.js';
 import cliAuthRoutes from './routes/cli-auth.js';
 import userRoutes from './routes/user.js';
+import userWorkspacesRoutes from './routes/users.js';
 import codexRoutes from './routes/codex.js';
 import geminiRoutes from './routes/gemini.js';
 import pluginsRoutes from './routes/plugins.js';
@@ -389,6 +391,9 @@ app.use('/api/cli', authenticateToken, cliAuthRoutes);
 // User API Routes (protected)
 app.use('/api/user', authenticateToken, userRoutes);
 
+// User Workspaces/Settings API Routes (protected)
+app.use('/api/users', authenticateToken, userWorkspacesRoutes);
+
 // Codex API Routes (protected)
 app.use('/api/codex', authenticateToken, codexRoutes);
 
@@ -507,7 +512,7 @@ app.get('/api/projects/:projectName/sessions', authenticateToken, async (req, re
     try {
         const { limit = 5, offset = 0 } = req.query;
         const result = await getSessions(req.params.projectName, parseInt(limit), parseInt(offset));
-        applyCustomSessionNames(result.sessions, 'claude');
+        applyCustomSessionNames(req.user.id, result.sessions, 'claude');
         res.json(result);
     } catch (error) {
         res.status(500).json({ error: error.message });
@@ -531,7 +536,7 @@ app.delete('/api/projects/:projectName/sessions/:sessionId', authenticateToken, 
         const { projectName, sessionId } = req.params;
         console.log(`[API] Deleting session: ${sessionId} from project: ${projectName}`);
         await deleteSession(projectName, sessionId);
-        sessionNamesDb.deleteName(sessionId, 'claude');
+        sessionNamesDb.deleteName(req.user.id, sessionId, 'claude');
         console.log(`[API] Session ${sessionId} deleted successfully`);
         res.json({ success: true });
     } catch (error) {
@@ -558,7 +563,7 @@ app.put('/api/sessions/:sessionId/rename', authenticateToken, async (req, res) =
         if (!provider || !VALID_PROVIDERS.includes(provider)) {
             return res.status(400).json({ error: `Provider must be one of: ${VALID_PROVIDERS.join(', ')}` });
         }
-        sessionNamesDb.setName(safeSessionId, provider, summary.trim());
+        sessionNamesDb.setName(req.user.id, safeSessionId, provider, summary.trim());
         res.json({ success: true });
     } catch (error) {
         console.error(`[API] Error renaming session ${req.params.sessionId}:`, error);
@@ -1626,6 +1631,23 @@ function handleChatConnection(ws, request) {
     });
 }
 
+/** Decode WebSocket text frames as UTF-8 JSON (ws may deliver Buffer / ArrayBuffer). */
+function parseShellClientJson(message) {
+    if (typeof message === 'string') {
+        return JSON.parse(message);
+    }
+    if (Buffer.isBuffer(message)) {
+        return JSON.parse(message.toString('utf8'));
+    }
+    if (message instanceof ArrayBuffer) {
+        return JSON.parse(Buffer.from(message).toString('utf8'));
+    }
+    if (Array.isArray(message)) {
+        return JSON.parse(Buffer.concat(message).toString('utf8'));
+    }
+    return JSON.parse(Buffer.from(message).toString('utf8'));
+}
+
 // Handle shell WebSocket connections
 function handleShellConnection(ws) {
     console.log('🐚 Shell client connected');
@@ -1636,8 +1658,11 @@ function handleShellConnection(ws) {
 
     ws.on('message', async (message) => {
         try {
-            const data = JSON.parse(message);
-            console.log('📨 Shell message received:', data.type);
+            const data = parseShellClientJson(message);
+            // High-frequency messages (keystrokes, resizes) are omitted to avoid log spam.
+            if (data.type !== 'input' && data.type !== 'resize') {
+                console.log('📨 Shell message received:', data.type);
+            }
 
             if (data.type === 'init') {
                 const projectPath = data.projectPath || process.cwd();
@@ -1793,13 +1818,28 @@ function handleShellConnection(ws) {
                             shellCommand = command;
                         }
                     } else {
-                        // Claude (default provider)
-                        const command = initialCommand || 'claude';
+                        // Claude (default provider) - check for claude or claudecode
+                        console.log('🔍 Checking for claude or claudecode CLI...');
+                        const cliCommand = getShellClaudeCliCommand();
+                        console.log('🔍 CLI check result:', cliCommand);
+
+                        if (!cliCommand) {
+                            console.log('❌ No Claude CLI found, sending error message');
+                            ws.send(JSON.stringify({
+                                type: 'output',
+                                data: '\x1b[31mError: Neither "claude" nor "claudecode" CLI command found.\x1b[0m\r\n\r\nPlease install one of them:\r\n  \x1b[36m- npm install -g @anthropic-ai/claude-cli\x1b[0m (for claude)\r\n  \x1b[36m- npm install -g claudecode\x1b[0m (for claudecode)\r\n\r\n'
+                            }));
+                            ws.close();
+                            return;
+                        }
+
+                        console.log('✅ Using CLI:', cliCommand);
+                        const command = initialCommand || cliCommand;
                         if (hasSession && sessionId) {
                             if (os.platform() === 'win32') {
-                                shellCommand = `claude --resume "${sessionId}"; if ($LASTEXITCODE -ne 0) { claude }`;
+                                shellCommand = `${cliCommand} --resume "${sessionId}"; if ($LASTEXITCODE -ne 0) { ${cliCommand} }`;
                             } else {
-                                shellCommand = `claude --resume "${sessionId}" || claude`;
+                                shellCommand = `${cliCommand} --resume "${sessionId}" || ${cliCommand}`;
                             }
                         } else {
                             shellCommand = command;
@@ -1826,7 +1866,9 @@ function handleShellConnection(ws) {
                             ...process.env,
                             TERM: 'xterm-256color',
                             COLORTERM: 'truecolor',
-                            FORCE_COLOR: '3'
+                            FORCE_COLOR: '3',
+                            LANG: 'en_US.UTF-8',
+                            LC_ALL: 'en_US.UTF-8'
                         }
                     });
 
@@ -1932,10 +1974,11 @@ function handleShellConnection(ws) {
                 }
 
             } else if (data.type === 'input') {
-                // Send input to shell process
+                // Send input to shell process (JSON must carry UTF-8 text as a JS string)
+                const inputChunk = typeof data.data === 'string' ? data.data : '';
                 if (shellProcess && shellProcess.write) {
                     try {
-                        shellProcess.write(data.data);
+                        shellProcess.write(inputChunk);
                     } catch (error) {
                         console.error('Error writing to shell:', error);
                     }

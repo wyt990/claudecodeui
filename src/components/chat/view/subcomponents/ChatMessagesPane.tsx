@@ -2,6 +2,7 @@ import { useTranslation } from 'react-i18next';
 import { useCallback, useRef } from 'react';
 import type { Dispatch, RefObject, SetStateAction } from 'react';
 import type { ChatMessage } from '../../types/types';
+import type { ClaudeModelPickerOption } from '../../hooks/useChatProviderState';
 import type { Project, ProjectSession, SessionProvider } from '../../../../types/app';
 import { getIntrinsicMessageKey } from '../../utils/messageKeys';
 import MessageComponent from './MessageComponent';
@@ -20,6 +21,7 @@ interface ChatMessagesPaneProps {
   textareaRef: RefObject<HTMLTextAreaElement>;
   claudeModel: string;
   setClaudeModel: (model: string) => void;
+  claudeModelOptions: ClaudeModelPickerOption[];
   cursorModel: string;
   setCursorModel: (model: string) => void;
   codexModel: string;
@@ -65,6 +67,7 @@ export default function ChatMessagesPane({
   textareaRef,
   claudeModel,
   setClaudeModel,
+  claudeModelOptions,
   cursorModel,
   setCursorModel,
   codexModel,
@@ -148,6 +151,7 @@ export default function ChatMessagesPane({
           textareaRef={textareaRef}
           claudeModel={claudeModel}
           setClaudeModel={setClaudeModel}
+          claudeModelOptions={claudeModelOptions}
           cursorModel={cursorModel}
           setCursorModel={setCursorModel}
           codexModel={codexModel}

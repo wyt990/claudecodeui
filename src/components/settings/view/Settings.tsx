@@ -13,12 +13,17 @@ import NotificationsSettingsTab from '../view/tabs/NotificationsSettingsTab';
 import TasksSettingsTab from '../view/tabs/tasks-settings/TasksSettingsTab';
 import PluginSettingsTab from '../../plugins/view/PluginSettingsTab';
 import AboutTab from '../view/tabs/AboutTab';
+import UserManagementTab from '../view/tabs/UserManagementTab';
 import { useSettingsController } from '../hooks/useSettingsController';
 import { useWebPush } from '../../../hooks/useWebPush';
+import { useAuth } from '../../auth';
 import type { SettingsProps } from '../types/types';
 
 function Settings({ isOpen, onClose, projects = [], initialTab = 'agents' }: SettingsProps) {
   const { t } = useTranslation('settings');
+  const { user } = useAuth();
+  const isAdmin = user?.role === 'admin';
+
   const {
     activeTab,
     setActiveTab,
@@ -136,7 +141,7 @@ function Settings({ isOpen, onClose, projects = [], initialTab = 'agents' }: Set
 
         {/* Body: sidebar + content */}
         <div className="flex min-h-0 flex-1 flex-col md:flex-row">
-          <SettingsSidebar activeTab={activeTab} onChange={setActiveTab} />
+          <SettingsSidebar activeTab={activeTab} onChange={setActiveTab} isAdmin={isAdmin} />
 
           {/* Content */}
           <main className="flex-1 overflow-y-auto">
@@ -209,6 +214,8 @@ function Settings({ isOpen, onClose, projects = [], initialTab = 'agents' }: Set
               {activeTab === 'plugins' && <PluginSettingsTab />}
 
               {activeTab === 'about' && <AboutTab />}
+
+              {activeTab === 'users' && isAdmin && <UserManagementTab />}
             </div>
           </main>
         </div>

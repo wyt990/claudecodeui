@@ -9,6 +9,7 @@ import {
   GEMINI_MODELS,
 } from "../../../../../shared/modelConstants";
 import type { ProjectSession, SessionProvider } from "../../../../types/app";
+import type { ClaudeModelPickerOption } from "../../hooks/useChatProviderState";
 import { NextTaskBanner } from "../../../task-master";
 
 type ProviderSelectionEmptyStateProps = {
@@ -19,6 +20,7 @@ type ProviderSelectionEmptyStateProps = {
   textareaRef: React.RefObject<HTMLTextAreaElement>;
   claudeModel: string;
   setClaudeModel: (model: string) => void;
+  claudeModelOptions: ClaudeModelPickerOption[];
   cursorModel: string;
   setCursorModel: (model: string) => void;
   codexModel: string;
@@ -75,8 +77,12 @@ const PROVIDERS: ProviderDef[] = [
   },
 ];
 
-function getModelConfig(p: SessionProvider) {
-  if (p === "claude") return CLAUDE_MODELS;
+function getModelConfig(p: SessionProvider, claudeOptions: ClaudeModelPickerOption[]) {
+  if (p === "claude") {
+    return claudeOptions.length
+      ? { ...CLAUDE_MODELS, OPTIONS: claudeOptions }
+      : CLAUDE_MODELS;
+  }
   if (p === "codex") return CODEX_MODELS;
   if (p === "gemini") return GEMINI_MODELS;
   return CURSOR_MODELS;
@@ -103,6 +109,7 @@ export default function ProviderSelectionEmptyState({
   textareaRef,
   claudeModel,
   setClaudeModel,
+  claudeModelOptions,
   cursorModel,
   setCursorModel,
   codexModel,
@@ -141,7 +148,7 @@ export default function ProviderSelectionEmptyState({
     }
   };
 
-  const modelConfig = getModelConfig(provider);
+  const modelConfig = getModelConfig(provider, claudeModelOptions);
   const currentModel = getModelValue(
     provider,
     claudeModel,

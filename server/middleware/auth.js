@@ -11,11 +11,24 @@ const validateApiKey = (req, res, next) => {
   if (!process.env.API_KEY) {
     return next();
   }
-  
+
   const apiKey = req.headers['x-api-key'];
   if (apiKey !== process.env.API_KEY) {
     return res.status(401).json({ error: 'Invalid API key' });
   }
+  next();
+};
+
+// Admin role middleware - requires user to have admin role
+const requireAdmin = (req, res, next) => {
+  if (!req.user) {
+    return res.status(401).json({ error: 'Authentication required' });
+  }
+
+  if (req.user.role !== 'admin') {
+    return res.status(403).json({ error: 'Admin access required' });
+  }
+
   next();
 };
 
@@ -81,7 +94,8 @@ const generateToken = (user) => {
   return jwt.sign(
     {
       userId: user.id,
-      username: user.username
+      username: user.username,
+      role: user.role
     },
     JWT_SECRET,
     { expiresIn: '7d' }
@@ -126,6 +140,7 @@ const authenticateWebSocket = (token) => {
 export {
   validateApiKey,
   authenticateToken,
+  requireAdmin,
   generateToken,
   authenticateWebSocket,
   JWT_SECRET

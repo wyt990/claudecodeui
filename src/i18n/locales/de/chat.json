@@ -9,7 +9,14 @@
     "copied": "Nachricht kopiert",
     "selectFormat": "Kopierformat auswählen",
     "copyAsMarkdown": "Als Markdown kopieren",
-    "copyAsText": "Als Text kopieren"
+    "copyAsText": "Als Text kopieren",
+    "textShort": "TXT",
+    "markdownShort": "MD"
+  },
+  "claudeCli": {
+    "shellBinaryBadge": "Shell-CLI: {{command}}",
+    "shellBinaryNone": "Shell-CLI: nicht gefunden",
+    "shellBinaryTitle": "Gleiche PATH-Auflösung wie im Web-Terminal für Claude-Sitzungen: zuerst offizielles claude, sonst claudecode. Der Chat nutzt das Claude Agent SDK und startet diese Binärdatei nicht."
   },
   "messageTypes": {
     "user": "Benutzer:in",
@@ -133,6 +140,7 @@
     },
     "clickToChangeMode": "Klicken, um den Berechtigungsmodus zu ändern (oder Tab in der Eingabe drücken)",
     "showAllCommands": "Alle Befehle anzeigen",
+    "claudeModel": "Modell",
     "clearInput": "Eingabe leeren",
     "scrollToBottom": "Nach unten scrollen"
   },

@@ -1,6 +1,9 @@
 import React from 'react';
+import { ChevronDown } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
+import type { ClaudeModelPickerOption } from '../../hooks/useChatProviderState';
 import type { PermissionMode, Provider } from '../../types/types';
+import ClaudeShellBinaryBadge from './ClaudeShellBinaryBadge';
 import ThinkingModeSelector from './ThinkingModeSelector';
 import TokenUsagePie from './TokenUsagePie';
 
@@ -18,6 +21,9 @@ interface ChatInputControlsProps {
   isUserScrolledUp: boolean;
   hasMessages: boolean;
   onScrollToBottom: () => void;
+  claudeModel: string;
+  onClaudeModelChange: (model: string) => void;
+  claudeModelOptions: ClaudeModelPickerOption[];
 }
 
 export default function ChatInputControls({
@@ -34,8 +40,12 @@ export default function ChatInputControls({
   isUserScrolledUp,
   hasMessages,
   onScrollToBottom,
+  claudeModel,
+  onClaudeModelChange,
+  claudeModelOptions,
 }: ChatInputControlsProps) {
   const { t } = useTranslation('chat');
+  const claudeModelFieldLabel = t('input.claudeModel', { defaultValue: 'Model' });
 
   return (
     <div className="flex flex-wrap items-center justify-center gap-2 sm:gap-3">
@@ -77,6 +87,31 @@ export default function ChatInputControls({
       {provider === 'claude' && (
         <ThinkingModeSelector selectedMode={thinkingMode} onModeChange={setThinkingMode} onClose={() => {}} className="" />
       )}
+
+      {provider === 'claude' && claudeModelOptions.length > 0 && (
+        <div className="flex items-center gap-1.5">
+          <span className="hidden text-xs text-muted-foreground sm:inline">
+            {claudeModelFieldLabel}
+          </span>
+          <div className="relative">
+            <select
+              value={claudeModel}
+              onChange={(event) => onClaudeModelChange(event.target.value)}
+              className="max-w-[min(100vw-8rem,220px)] cursor-pointer appearance-none rounded-lg border border-border/60 bg-muted/50 py-1 pl-2 pr-7 text-xs font-medium text-foreground transition-colors hover:bg-muted focus:outline-none focus:ring-2 focus:ring-primary/20 sm:max-w-[240px] sm:py-1.5 sm:pl-2.5 sm:text-sm"
+              title={claudeModelFieldLabel}
+            >
+              {claudeModelOptions.map((opt) => (
+                <option key={opt.value} value={opt.value}>
+                  {opt.label}
+                </option>
+              ))}
+            </select>
+            <ChevronDown className="pointer-events-none absolute right-1.5 top-1/2 h-3 w-3 -translate-y-1/2 text-muted-foreground sm:right-2" />
+          </div>
+        </div>
+      )}
+
+      {provider === 'claude' && <ClaudeShellBinaryBadge />}
 
       <TokenUsagePie used={tokenBudget?.used || 0} total={tokenBudget?.total || parseInt(import.meta.env.VITE_CONTEXT_WINDOW) || 160000} />
 

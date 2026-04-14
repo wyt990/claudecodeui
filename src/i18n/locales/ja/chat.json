@@ -9,7 +9,14 @@
     "copied": "メッセージをコピーしました",
     "selectFormat": "コピー形式を選択",
     "copyAsMarkdown": "Markdownとしてコピー",
-    "copyAsText": "テキストとしてコピー"
+    "copyAsText": "テキストとしてコピー",
+    "textShort": "TXT",
+    "markdownShort": "MD"
+  },
+  "claudeCli": {
+    "shellBinaryBadge": "シェル CLI: {{command}}",
+    "shellBinaryNone": "シェル CLI: 見つかりません",
+    "shellBinaryTitle": "Web ターミナルで Claude セッションを起動するときと同じ PATH 解決（先に claude、なければ claudecode）。チャットは Claude Agent SDK を使用し、このバイナリは起動しません。"
   },
   "messageTypes": {
     "user": "U",
@@ -113,7 +120,8 @@
       "enter": "Enterで送信 • Shift+Enterで改行 • Tabでモード切替 • / でスラッシュコマンド"
     },
     "clickToChangeMode": "クリックで権限モードを変更（または入力欄でTab）",
-    "showAllCommands": "すべてのコマンドを表示"
+    "showAllCommands": "すべてのコマンドを表示",
+    "claudeModel": "モデル"
   },
   "thinkingMode": {
     "selector": {

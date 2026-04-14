@@ -4,9 +4,13 @@ import { CLAUDE_MODELS, CODEX_MODELS, CURSOR_MODELS, GEMINI_MODELS } from '../..
 import type { PendingPermissionRequest, PermissionMode } from '../types/types';
 import type { ProjectSession, SessionProvider } from '../../../types/app';
 
+export type ClaudeModelPickerOption = { value: string; label: string };
+
 interface UseChatProviderStateArgs {
   selectedSession: ProjectSession | null;
 }
+
+const PRESET_CLAUDE_MODEL_IDS = new Set(CLAUDE_MODELS.OPTIONS.map((o) => o.value));
 
 export function useChatProviderState({ selectedSession }: UseChatProviderStateArgs) {
   const [permissionMode, setPermissionMode] = useState<PermissionMode>('default');
@@ -26,6 +30,10 @@ export function useChatProviderState({ selectedSession }: UseChatProviderStateAr
   const [geminiModel, setGeminiModel] = useState<string>(() => {
     return localStorage.getItem('gemini-model') || GEMINI_MODELS.DEFAULT;
   });
+
+  const [claudeModelOptions, setClaudeModelOptions] = useState<ClaudeModelPickerOption[]>(() => [
+    ...CLAUDE_MODELS.OPTIONS,
+  ]);
 
   const lastProviderRef = useRef(provider);
 
@@ -60,6 +68,74 @@ export function useChatProviderState({ selectedSession }: UseChatProviderStateAr
       previous.filter((request) => !request.sessionId || request.sessionId === selectedSession?.id),
     );
   }, [selectedSession?.id]);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    const applyModelsFromRemote = (data: {
+      models: { id: string; label?: string }[];
+      defaultModelId?: string | null;
+    }) => {
+      const opts: ClaudeModelPickerOption[] = data.models.map((m) => ({
+        value: m.id,
+        label: m.label?.trim() ? m.label.trim() : m.id,
+      }));
+      setClaudeModelOptions(opts);
+      const ids = new Set(opts.map((o) => o.value));
+      const envDefault = typeof data.defaultModelId === 'string' ? data.defaultModelId : '';
+      setClaudeModel((prev) => {
+        const fromStorage = localStorage.getItem('claude-model');
+        const cur = fromStorage || prev;
+        if (ids.has(cur)) {
+          return prev;
+        }
+        if (PRESET_CLAUDE_MODEL_IDS.has(cur) || !ids.has(cur)) {
+          const fallback =
+            opts.find((o) => o.value !== '(default)')?.value || opts[0]!.value;
+          const next = envDefault && ids.has(envDefault) ? envDefault : fallback;
+          localStorage.setItem('claude-model', next);
+          return next;
+        }
+        return prev;
+      });
+    };
+
+    (async () => {
+      try {
+        const cfgRes = await authenticatedFetch('/api/cli/claude/sdk-config');
+        const cfg = (await cfgRes.json()) as {
+          dynamicModels?: boolean;
+          claudecodeModelPicker?: boolean;
+        };
+        if (cancelled) {
+          return;
+        }
+
+        if (cfg.claudecodeModelPicker) {
+          const r = await authenticatedFetch('/api/cli/claude/claudecode-models');
+          const data = await r.json();
+          if (!cancelled && data?.models?.length) {
+            applyModelsFromRemote(data);
+            return;
+          }
+        }
+
+        if (cfg.dynamicModels) {
+          const r = await authenticatedFetch('/api/cli/claude/openai-models');
+          const data = await r.json();
+          if (!cancelled && data?.models?.length) {
+            applyModelsFromRemote(data);
+          }
+        }
+      } catch {
+        /* optional gateway / claudecode */
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   useEffect(() => {
     if (provider !== 'cursor') {
@@ -106,6 +182,7 @@ export function useChatProviderState({ selectedSession }: UseChatProviderStateAr
     setCursorModel,
     claudeModel,
     setClaudeModel,
+    claudeModelOptions,
     codexModel,
     setCodexModel,
     geminiModel,

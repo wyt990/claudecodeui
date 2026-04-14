@@ -11,6 +11,7 @@ import type {
   SetStateAction,
   TouchEvent,
 } from 'react';
+import type { ClaudeModelPickerOption } from '../../hooks/useChatProviderState';
 import type { PendingPermissionRequest, PermissionMode, Provider } from '../../types/types';
 import CommandMenu from './CommandMenu';
 import ClaudeStatus from './ClaudeStatus';
@@ -34,6 +35,9 @@ interface SlashCommand {
 }
 
 interface ChatComposerProps {
+  claudeModel: string;
+  setClaudeModel: (model: string) => void;
+  claudeModelOptions: ClaudeModelPickerOption[];
   pendingPermissionRequests: PendingPermissionRequest[];
   handlePermissionDecision: (
     requestIds: string | string[],
@@ -93,6 +97,9 @@ interface ChatComposerProps {
 }
 
 export default function ChatComposer({
+  claudeModel,
+  setClaudeModel,
+  claudeModelOptions,
   pendingPermissionRequests,
   handlePermissionDecision,
   handleGrantToolPermission,
@@ -199,6 +206,12 @@ export default function ChatComposer({
           isUserScrolledUp={isUserScrolledUp}
           hasMessages={hasMessages}
           onScrollToBottom={onScrollToBottom}
+          claudeModel={claudeModel}
+          onClaudeModelChange={(value) => {
+            setClaudeModel(value);
+            localStorage.setItem('claude-model', value);
+          }}
+          claudeModelOptions={claudeModelOptions}
         />}
       </div>
 

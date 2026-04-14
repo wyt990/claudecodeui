@@ -3,8 +3,112 @@ import { spawn } from 'child_process';
 import fs from 'fs/promises';
 import path from 'path';
 import os from 'os';
+import { getClaudeShellBinaryResolution, getClaudeCodeExecutablePathForSdk } from '../utils/claude-cli-detect.js';
+import {
+  getOpenAICompatBaseUrlTrimmed,
+  getEnvDefaultOpenAICompatModel,
+  hasOpenAICompatGatewayCredentials,
+  isClaudeOpenAICompatMode
+} from '../utils/claude-openai-env.js';
+import { fetchOpenAIModelsList } from '../utils/claude-openai-models.js';
+import {
+  isClaudecodeExecutablePath,
+  runClaudecodeListModels
+} from '../utils/claude-list-models-cli.js';
 
 const router = express.Router();
+
+/** Which `claude` / `claudecode` binary the web terminal would pick (same order as shell PTY). */
+router.get('/claude/shell-binary', (req, res) => {
+  try {
+    res.json(getClaudeShellBinaryResolution());
+  } catch (error) {
+    console.error('Error resolving Claude shell binary:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+/** SDK + local fork: executable path, OpenAI-compat flags, default model hint (no secrets). */
+router.get('/claude/sdk-config', (req, res) => {
+  try {
+    const openAICompat = isClaudeOpenAICompatMode();
+    const baseUrl = getOpenAICompatBaseUrlTrimmed();
+    const hasCreds = hasOpenAICompatGatewayCredentials();
+    const dynamicModels = openAICompat && Boolean(baseUrl) && hasCreds;
+    const sdkExec = getClaudeCodeExecutablePathForSdk();
+    const claudecodeModelPicker = Boolean(sdkExec && isClaudecodeExecutablePath(sdkExec));
+    res.json({
+      shellBinary: getClaudeShellBinaryResolution(),
+      sdkExecutablePath: sdkExec,
+      openAICompat,
+      dynamicModels,
+      claudecodeModelPicker,
+      defaultModelId: getEnvDefaultOpenAICompatModel() || null,
+      gatewayBaseUrlConfigured: Boolean(baseUrl)
+    });
+  } catch (error) {
+    console.error('Error building Claude SDK config:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+/**
+ * Models from `claudecode --list-models` (claudecode / local fork only).
+ * Response is parsed picker entries only — raw stdout may contain secrets and is never sent.
+ */
+router.get('/claude/claudecode-models', (req, res) => {
+  try {
+    const sdkExec = getClaudeCodeExecutablePathForSdk();
+    if (!sdkExec || !isClaudecodeExecutablePath(sdkExec)) {
+      return res.json({
+        source: 'off',
+        models: [],
+        defaultModelId: null,
+        error: null
+      });
+    }
+    const out = runClaudecodeListModels();
+    res.json({ source: 'claudecode-list-models', ...out });
+  } catch (error) {
+    console.error('Error running claudecode --list-models:', error);
+    res.status(500).json({
+      source: 'claudecode-list-models',
+      models: [],
+      defaultModelId: null,
+      error: error.message
+    });
+  }
+});
+
+/** Models from OpenAI-compatible GET /v1/models (same gateway as claudecode). */
+router.get('/claude/openai-models', async (req, res) => {
+  try {
+    if (!isClaudeOpenAICompatMode()) {
+      return res.json({
+        models: [],
+        error: 'Enable CLAUDE_CODE_USE_OPENAI_COMPAT_API',
+        defaultModelId: null
+      });
+    }
+    if (!getOpenAICompatBaseUrlTrimmed() || !hasOpenAICompatGatewayCredentials()) {
+      return res.json({
+        models: [],
+        error: 'Configure gateway URL and ANTHROPIC_API_KEY or ANTHROPIC_AUTH_TOKEN',
+        defaultModelId: getEnvDefaultOpenAICompatModel() || null
+      });
+    }
+    const { models, error } = await fetchOpenAIModelsList();
+    const envDefault = getEnvDefaultOpenAICompatModel();
+    const defaultModelId =
+      (envDefault && models.some((m) => m.id === envDefault) && envDefault) ||
+      (models[0] && models[0].id) ||
+      null;
+    res.json({ models, error, defaultModelId });
+  } catch (error) {
+    console.error('Error fetching OpenAI-compat models:', error);
+    res.status(500).json({ models: [], error: error.message, defaultModelId: null });
+  }
+});
 
 router.get('/claude/status', async (req, res) => {
   try {

@@ -74,6 +74,7 @@
   },
   "terminalShortcuts": {
     "title": "Горячие клавиши терминала",
+    "paste": "Вставить",
     "sectionKeys": "Клавиши",
     "sectionNavigation": "Навигация",
     "escape": "Escape",

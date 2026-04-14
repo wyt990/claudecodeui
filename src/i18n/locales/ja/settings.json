@@ -74,6 +74,7 @@
   },
   "terminalShortcuts": {
     "title": "ターミナルショートカット",
+    "paste": "貼り付け",
     "sectionKeys": "キー",
     "sectionNavigation": "ナビゲーション",
     "escape": "Escape",

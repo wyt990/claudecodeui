@@ -9,7 +9,14 @@
     "copied": "消息已复制",
     "selectFormat": "选择复制格式",
     "copyAsMarkdown": "复制为 Markdown",
-    "copyAsText": "复制为纯文本"
+    "copyAsText": "复制为纯文本",
+    "textShort": "文本",
+    "markdownShort": "MD"
+  },
+  "claudeCli": {
+    "shellBinaryBadge": "终端 CLI：{{command}}",
+    "shellBinaryNone": "终端 CLI：未找到",
+    "shellBinaryTitle": "与网页终端启动 Claude 会话时一致：PATH 上优先使用官方 claude，否则使用 claudecode。此处聊天走 Claude Agent SDK，不会直接执行该命令。"
   },
   "messageTypes": {
     "user": "U",
@@ -115,6 +122,7 @@
     },
     "clickToChangeMode": "点击更改权限模式（或在输入框中按 Tab）",
     "showAllCommands": "显示所有命令",
+    "claudeModel": "模型",
     "clearInput": "清空输入",
     "scrollToBottom": "滚动到底部"
   },

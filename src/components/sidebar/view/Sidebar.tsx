@@ -6,6 +6,7 @@ import { useUiPreferences } from '../../../hooks/useUiPreferences';
 import { useSidebarController } from '../hooks/useSidebarController';
 import { useTaskMaster } from '../../../contexts/TaskMasterContext';
 import { useTasksSettings } from '../../../contexts/TasksSettingsContext';
+import { useAuth } from '../../auth/context/AuthContext';
 import type { Project, SessionProvider } from '../../../types/app';
 import type { MCPServerStatus, SidebarProps } from '../types/types';
 import SidebarCollapsed from './subcomponents/SidebarCollapsed';
@@ -46,6 +47,7 @@ function Sidebar({
   const { sidebarVisible } = preferences;
   const { setCurrentProject, mcpServerStatus } = useTaskMaster() as TaskMasterSidebarContext;
   const { tasksEnabled } = useTasksSettings();
+  const auth = useAuth();
 
   const {
     isSidebarCollapsed,
@@ -214,6 +216,7 @@ function Sidebar({
           onShowSettings={onShowSettings}
           updateAvailable={updateAvailable}
           onShowVersionModal={() => setShowVersionModal(true)}
+          onLogout={() => auth.logout()}
           t={t}
         />
       ) : (
@@ -269,6 +272,7 @@ function Sidebar({
             currentVersion={currentVersion}
             onShowVersionModal={() => setShowVersionModal(true)}
             onShowSettings={onShowSettings}
+            onLogout={() => auth.logout()}
             projectListProps={projectListProps}
             t={t}
           />

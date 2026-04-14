@@ -74,6 +74,7 @@
   },
   "terminalShortcuts": {
     "title": "Terminal-Tastenkürzel",
+    "paste": "Einfügen",
     "sectionKeys": "Tasten",
     "sectionNavigation": "Navigation",
     "escape": "Escape",

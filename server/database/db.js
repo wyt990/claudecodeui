@@ -85,19 +85,92 @@ const runMigrations = () => {
     const tableInfo = db.prepare("PRAGMA table_info(users)").all();
     const columnNames = tableInfo.map(col => col.name);
 
-    if (!columnNames.includes('git_name')) {
-      console.log('Running migration: Adding git_name column');
-      db.exec('ALTER TABLE users ADD COLUMN git_name TEXT');
+    // Multi-user migration: Add role column
+    if (!columnNames.includes('role')) {
+      console.log('Running migration: Adding role column for multi-user support');
+      db.exec("ALTER TABLE users ADD COLUMN role TEXT DEFAULT 'user'");
+      // Make the first user an admin if they exist
+      db.exec("UPDATE users SET role = 'admin' WHERE id = (SELECT MIN(id) FROM users)");
     }
 
-    if (!columnNames.includes('git_email')) {
-      console.log('Running migration: Adding git_email column');
-      db.exec('ALTER TABLE users ADD COLUMN git_email TEXT');
+    // Multi-user migration: Add projects_root column
+    if (!columnNames.includes('projects_root')) {
+      console.log('Running migration: Adding projects_root column');
+      db.exec('ALTER TABLE users ADD COLUMN projects_root TEXT');
     }
 
-    if (!columnNames.includes('has_completed_onboarding')) {
-      console.log('Running migration: Adding has_completed_onboarding column');
-      db.exec('ALTER TABLE users ADD COLUMN has_completed_onboarding BOOLEAN DEFAULT 0');
+    // Create user_workspaces table if it doesn't exist
+    db.exec(`CREATE TABLE IF NOT EXISTS user_workspaces (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id INTEGER NOT NULL,
+      name TEXT NOT NULL,
+      root_path TEXT NOT NULL,
+      is_default BOOLEAN DEFAULT 0,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+    )`);
+    db.exec('CREATE INDEX IF NOT EXISTS idx_user_workspaces_user ON user_workspaces(user_id)');
+
+    // Create user_mcp_configs table if it doesn't exist
+    db.exec(`CREATE TABLE IF NOT EXISTS user_mcp_configs (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id INTEGER NOT NULL,
+      provider TEXT NOT NULL DEFAULT 'claude',
+      config_json TEXT NOT NULL,
+      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+      UNIQUE(user_id, provider)
+    )`);
+    db.exec('CREATE INDEX IF NOT EXISTS idx_user_mcp_configs_user ON user_mcp_configs(user_id)');
+
+    // Create user_settings table if it doesn't exist
+    db.exec(`CREATE TABLE IF NOT EXISTS user_settings (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id INTEGER NOT NULL,
+      setting_key TEXT NOT NULL,
+      setting_value TEXT NOT NULL,
+      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+      UNIQUE(user_id, setting_key)
+    )`);
+    db.exec('CREATE INDEX IF NOT EXISTS idx_user_settings_user ON user_settings(user_id)');
+
+    // Migrate session_names to be user-specific
+    // First add user_id column if it doesn't exist
+    const sessionNamesInfo = db.prepare("PRAGMA table_info(session_names)").all();
+    const sessionNamesColumns = sessionNamesInfo.map(col => col.name);
+
+    if (!sessionNamesColumns.includes('user_id')) {
+      console.log('Running migration: Making session_names user-specific');
+      // Add user_id column
+      db.exec('ALTER TABLE session_names ADD COLUMN user_id INTEGER');
+
+      // If there's an existing user, associate all existing sessions with that user
+      const firstUser = db.prepare('SELECT id FROM users ORDER BY id LIMIT 1').get();
+      if (firstUser) {
+        db.run('UPDATE session_names SET user_id = ? WHERE user_id IS NULL', firstUser.id);
+      }
+
+      // Drop the old unique constraint and create new one with user_id
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS session_names_new (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          user_id INTEGER NOT NULL,
+          session_id TEXT NOT NULL,
+          provider TEXT NOT NULL DEFAULT 'claude',
+          custom_name TEXT NOT NULL,
+          created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+          updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+          FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+          UNIQUE(user_id, session_id, provider)
+        )
+      `);
+      db.exec('INSERT INTO session_names_new SELECT * FROM session_names WHERE user_id IS NOT NULL');
+      db.exec('DROP TABLE session_names');
+      db.exec('ALTER TABLE session_names_new RENAME TO session_names');
+      db.exec('CREATE INDEX IF NOT EXISTS idx_session_names_user ON session_names(user_id)');
+      db.exec('CREATE INDEX IF NOT EXISTS idx_session_names_lookup ON session_names(session_id, provider)');
     }
 
     db.exec(`
@@ -129,6 +202,7 @@ const runMigrations = () => {
         FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
       )
     `);
+
     // Create app_config table if it doesn't exist (for existing installations)
     db.exec(`CREATE TABLE IF NOT EXISTS app_config (
       key TEXT PRIMARY KEY,
@@ -136,17 +210,22 @@ const runMigrations = () => {
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP
     )`);
 
-    // Create session_names table if it doesn't exist (for existing installations)
-    db.exec(`CREATE TABLE IF NOT EXISTS session_names (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      session_id TEXT NOT NULL,
-      provider TEXT NOT NULL DEFAULT 'claude',
-      custom_name TEXT NOT NULL,
-      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-      UNIQUE(session_id, provider)
-    )`);
-    db.exec('CREATE INDEX IF NOT EXISTS idx_session_names_lookup ON session_names(session_id, provider)');
+    // Create default workspace for existing users if none exists
+    const usersWithoutWorkspace = db.prepare(`
+      SELECT u.id, u.username
+      FROM users u
+      LEFT JOIN user_workspaces uw ON u.id = uw.user_id
+      WHERE uw.id IS NULL
+    `).all();
+
+    for (const user of usersWithoutWorkspace) {
+      console.log(`Creating default workspace for user: ${user.username}`);
+      const defaultPath = process.env.DEFAULT_PROJECTS_ROOT || path.join(process.env.HOME || '', 'projects');
+      db.prepare(`
+        INSERT INTO user_workspaces (user_id, name, root_path, is_default)
+        VALUES (?, 'Default', ?, 1)
+      `).run(user.id, defaultPath);
+    }
 
     console.log('Database migrations completed successfully');
   } catch (error) {
@@ -158,10 +237,19 @@ const runMigrations = () => {
 // Initialize database with schema
 const initializeDatabase = async () => {
   try {
-    const initSQL = fs.readFileSync(INIT_SQL_PATH, 'utf8');
-    db.exec(initSQL);
-    console.log('Database initialized successfully');
-    runMigrations();
+    // Check if database already has tables
+    const existingTables = db.prepare("SELECT name FROM sqlite_master WHERE type='table'").all();
+    const hasUsersTable = existingTables.some(t => t.name === 'users');
+
+    if (hasUsersTable) {
+      console.log('Existing database detected, running migrations only...');
+      runMigrations();
+    } else {
+      const initSQL = fs.readFileSync(INIT_SQL_PATH, 'utf8');
+      db.exec(initSQL);
+      console.log('Database initialized successfully');
+      runMigrations();
+    }
   } catch (error) {
     console.error('Error initializing database:', error.message);
     throw error;
@@ -180,12 +268,38 @@ const userDb = {
     }
   },
 
-  // Create a new user
-  createUser: (username, passwordHash) => {
+  // Get total user count
+  getUserCount: () => {
     try {
-      const stmt = db.prepare('INSERT INTO users (username, password_hash) VALUES (?, ?)');
-      const result = stmt.run(username, passwordHash);
-      return { id: result.lastInsertRowid, username };
+      const row = db.prepare('SELECT COUNT(*) as count FROM users WHERE is_active = 1').get();
+      return row.count;
+    } catch (err) {
+      throw err;
+    }
+  },
+
+  // Create a new user (multi-user support)
+  createUser: (username, passwordHash, role = 'user', projectsRoot = null) => {
+    try {
+      // First user becomes admin by default
+      const hasUsers = userDb.hasUsers();
+      const finalRole = !hasUsers ? 'admin' : role;
+
+      const stmt = db.prepare(`
+        INSERT INTO users (username, password_hash, role, projects_root)
+        VALUES (?, ?, ?, ?)
+      `);
+      const result = stmt.run(username, passwordHash, finalRole, projectsRoot);
+
+      // Create default workspace for new user
+      const userId = result.lastInsertRowid;
+      const defaultPath = projectsRoot || process.env.DEFAULT_PROJECTS_ROOT || path.join(process.env.HOME || '', 'projects');
+      db.prepare(`
+        INSERT INTO user_workspaces (user_id, name, root_path, is_default)
+        VALUES (?, 'Default', ?, 1)
+      `).run(userId, defaultPath);
+
+      return { id: userId, username, role: finalRole };
     } catch (err) {
       throw err;
     }
@@ -213,8 +327,92 @@ const userDb = {
   // Get user by ID
   getUserById: (userId) => {
     try {
-      const row = db.prepare('SELECT id, username, created_at, last_login FROM users WHERE id = ? AND is_active = 1').get(userId);
+      const row = db.prepare('SELECT id, username, role, created_at, last_login, git_name, git_email, has_completed_onboarding, projects_root FROM users WHERE id = ? AND is_active = 1').get(userId);
       return row;
+    } catch (err) {
+      throw err;
+    }
+  },
+
+  // Get all users (for admin) - including soft-deleted
+  getAllUsers: () => {
+    try {
+      const rows = db.prepare(`
+        SELECT id, username, role, created_at, last_login, is_active, has_completed_onboarding
+        FROM users
+        ORDER BY is_active DESC, created_at DESC
+      `).all();
+      return rows;
+    } catch (err) {
+      throw err;
+    }
+  },
+
+  // Update user
+  updateUser: (userId, updates) => {
+    try {
+      const fields = [];
+      const values = [];
+
+      if (updates.username !== undefined) {
+        fields.push('username = ?');
+        values.push(updates.username);
+      }
+      if (updates.role !== undefined) {
+        fields.push('role = ?');
+        values.push(updates.role);
+      }
+      if (updates.is_active !== undefined) {
+        fields.push('is_active = ?');
+        values.push(updates.is_active ? 1 : 0);
+      }
+      if (updates.git_name !== undefined) {
+        fields.push('git_name = ?');
+        values.push(updates.git_name);
+      }
+      if (updates.git_email !== undefined) {
+        fields.push('git_email = ?');
+        values.push(updates.git_email);
+      }
+      if (updates.password_hash !== undefined) {
+        fields.push('password_hash = ?');
+        values.push(updates.password_hash);
+      }
+      if (updates.projects_root !== undefined) {
+        fields.push('projects_root = ?');
+        values.push(updates.projects_root);
+      }
+
+      if (fields.length === 0) {
+        return false;
+      }
+
+      values.push(userId);
+      const stmt = db.prepare(`UPDATE users SET ${fields.join(', ')} WHERE id = ?`);
+      const result = stmt.run(...values);
+      return result.changes > 0;
+    } catch (err) {
+      throw err;
+    }
+  },
+
+  // Delete user (soft delete by setting is_active = 0)
+  deleteUser: (userId) => {
+    try {
+      const stmt = db.prepare('UPDATE users SET is_active = 0 WHERE id = ?');
+      const result = stmt.run(userId);
+      return result.changes > 0;
+    } catch (err) {
+      throw err;
+    }
+  },
+
+  // Permanently delete user and all associated data
+  permanentlyDeleteUser: (userId) => {
+    try {
+      const stmt = db.prepare('DELETE FROM users WHERE id = ?');
+      const result = stmt.run(userId);
+      return result.changes > 0;
     } catch (err) {
       throw err;
     }
@@ -260,6 +458,16 @@ const userDb = {
     try {
       const row = db.prepare('SELECT has_completed_onboarding FROM users WHERE id = ?').get(userId);
       return row?.has_completed_onboarding === 1;
+    } catch (err) {
+      throw err;
+    }
+  },
+
+  // Check if user is admin
+  isAdmin: (userId) => {
+    try {
+      const row = db.prepare('SELECT role FROM users WHERE id = ?').get(userId);
+      return row?.role === 'admin';
     } catch (err) {
       throw err;
     }
@@ -515,51 +723,60 @@ const pushSubscriptionsDb = {
   }
 };
 
-// Session custom names database operations
+// Session custom names database operations (user-specific)
 const sessionNamesDb = {
-  // Set (insert or update) a custom session name
-  setName: (sessionId, provider, customName) => {
+  // Set (insert or update) a custom session name (user-specific)
+  setName: (userId, sessionId, provider, customName) => {
     db.prepare(`
-      INSERT INTO session_names (session_id, provider, custom_name)
-      VALUES (?, ?, ?)
-      ON CONFLICT(session_id, provider)
+      INSERT INTO session_names (user_id, session_id, provider, custom_name)
+      VALUES (?, ?, ?, ?)
+      ON CONFLICT(user_id, session_id, provider)
       DO UPDATE SET custom_name = excluded.custom_name, updated_at = CURRENT_TIMESTAMP
-    `).run(sessionId, provider, customName);
+    `).run(userId, sessionId, provider, customName);
   },
 
-  // Get a single custom session name
-  getName: (sessionId, provider) => {
+  // Get a single custom session name (user-specific)
+  getName: (userId, sessionId, provider) => {
     const row = db.prepare(
-      'SELECT custom_name FROM session_names WHERE session_id = ? AND provider = ?'
-    ).get(sessionId, provider);
+      'SELECT custom_name FROM session_names WHERE user_id = ? AND session_id = ? AND provider = ?'
+    ).get(userId, sessionId, provider);
     return row?.custom_name || null;
   },
 
-  // Batch lookup — returns Map<sessionId, customName>
-  getNames: (sessionIds, provider) => {
+  // Batch lookup — returns Map<sessionId, customName> (user-specific)
+  getNames: (userId, sessionIds, provider) => {
     if (!sessionIds.length) return new Map();
     const placeholders = sessionIds.map(() => '?').join(',');
     const rows = db.prepare(
       `SELECT session_id, custom_name FROM session_names
-       WHERE session_id IN (${placeholders}) AND provider = ?`
-    ).all(...sessionIds, provider);
+       WHERE user_id = ? AND session_id IN (${placeholders}) AND provider = ?`
+    ).all(userId, ...sessionIds, provider);
     return new Map(rows.map(r => [r.session_id, r.custom_name]));
   },
 
-  // Delete a custom session name
-  deleteName: (sessionId, provider) => {
+  // Delete a custom session name (user-specific)
+  deleteName: (userId, sessionId, provider) => {
     return db.prepare(
-      'DELETE FROM session_names WHERE session_id = ? AND provider = ?'
-    ).run(sessionId, provider).changes > 0;
+      'DELETE FROM session_names WHERE user_id = ? AND session_id = ? AND provider = ?'
+    ).run(userId, sessionId, provider).changes > 0;
   },
+
+  // Get all session names for a user
+  getAllNames: (userId, provider) => {
+    const rows = db.prepare(
+      'SELECT session_id, custom_name FROM session_names WHERE user_id = ? AND provider = ?'
+    ).all(userId, provider);
+    return new Map(rows.map(r => [r.session_id, r.custom_name]));
+  }
 };
 
-// Apply custom session names from the database (overrides CLI-generated summaries)
-function applyCustomSessionNames(sessions, provider) {
-  if (!sessions?.length) return;
+// Apply custom session names from the database (overrides CLI-generated summaries, user-specific)
+function applyCustomSessionNames(userId, sessions, provider) {
+  // Skip if userId is missing or sessions is not a valid array
+  if (!userId || !Array.isArray(sessions) || !sessions.length) return;
   try {
     const ids = sessions.map(s => s.id);
-    const customNames = sessionNamesDb.getNames(ids, provider);
+    const customNames = sessionNamesDb.getNames(userId, ids, provider);
     for (const session of sessions) {
       const custom = customNames.get(session.id);
       if (custom) session.summary = custom;
@@ -615,6 +832,214 @@ const githubTokensDb = {
   }
 };
 
+// User workspaces database operations
+const userWorkspacesDb = {
+  // Get all workspaces for a user
+  getWorkspaces: (userId) => {
+    try {
+      return db.prepare('SELECT * FROM user_workspaces WHERE user_id = ? ORDER BY is_default DESC, name ASC').all(userId);
+    } catch (err) {
+      throw err;
+    }
+  },
+
+  // Get default workspace for a user
+  getDefaultWorkspace: (userId) => {
+    try {
+      return db.prepare('SELECT * FROM user_workspaces WHERE user_id = ? AND is_default = 1').get(userId);
+    } catch (err) {
+      throw err;
+    }
+  },
+
+  // Get workspace by ID (with user ownership check)
+  getWorkspaceById: (userId, workspaceId) => {
+    try {
+      return db.prepare('SELECT * FROM user_workspaces WHERE id = ? AND user_id = ?').get(workspaceId, userId);
+    } catch (err) {
+      throw err;
+    }
+  },
+
+  // Create workspace
+  createWorkspace: (userId, name, rootPath, isDefault = false) => {
+    try {
+      // If this is set as default, unset other defaults
+      if (isDefault) {
+        db.prepare('UPDATE user_workspaces SET is_default = 0 WHERE user_id = ?').run(userId);
+      }
+
+      const stmt = db.prepare(`
+        INSERT INTO user_workspaces (user_id, name, root_path, is_default)
+        VALUES (?, ?, ?, ?)
+      `);
+      const result = stmt.run(userId, name, rootPath, isDefault ? 1 : 0);
+      return { id: result.lastInsertRowid, name, rootPath, isDefault };
+    } catch (err) {
+      throw err;
+    }
+  },
+
+  // Update workspace
+  updateWorkspace: (userId, workspaceId, updates) => {
+    try {
+      const fields = [];
+      const values = [];
+
+      if (updates.name !== undefined) {
+        fields.push('name = ?');
+        values.push(updates.name);
+      }
+      if (updates.root_path !== undefined) {
+        fields.push('root_path = ?');
+        values.push(updates.root_path);
+      }
+      if (updates.is_default !== undefined) {
+        fields.push('is_default = ?');
+        values.push(updates.is_default ? 1 : 0);
+        // Unset other defaults
+        db.prepare('UPDATE user_workspaces SET is_default = 0 WHERE user_id = ? AND id != ?').run(userId, workspaceId);
+      }
+
+      if (fields.length === 0) {
+        return false;
+      }
+
+      values.push(workspaceId, userId);
+      const stmt = db.prepare(`UPDATE user_workspaces SET ${fields.join(', ')}, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND user_id = ?`);
+      const result = stmt.run(...values);
+      return result.changes > 0;
+    } catch (err) {
+      throw err;
+    }
+  },
+
+  // Delete workspace
+  deleteWorkspace: (userId, workspaceId) => {
+    try {
+      const stmt = db.prepare('DELETE FROM user_workspaces WHERE id = ? AND user_id = ?');
+      const result = stmt.run(workspaceId, userId);
+      return result.changes > 0;
+    } catch (err) {
+      throw err;
+    }
+  }
+};
+
+// User MCP configurations database operations
+const userMcpConfigsDb = {
+  // Get MCP config for a user and provider
+  getConfig: (userId, provider = 'claude') => {
+    try {
+      const row = db.prepare('SELECT config_json FROM user_mcp_configs WHERE user_id = ? AND provider = ?').get(userId, provider);
+      if (!row) {
+        return null;
+      }
+      try {
+        return JSON.parse(row.config_json);
+      } catch {
+        return null;
+      }
+    } catch (err) {
+      throw err;
+    }
+  },
+
+  // Save MCP config
+  saveConfig: (userId, provider, config) => {
+    try {
+      const configJson = JSON.stringify(config);
+      db.prepare(`
+        INSERT INTO user_mcp_configs (user_id, provider, config_json, updated_at)
+        VALUES (?, ?, ?, CURRENT_TIMESTAMP)
+        ON CONFLICT(user_id, provider) DO UPDATE SET
+          config_json = excluded.config_json,
+          updated_at = CURRENT_TIMESTAMP
+      `).run(userId, provider, configJson);
+      return true;
+    } catch (err) {
+      throw err;
+    }
+  },
+
+  // Delete MCP config
+  deleteConfig: (userId, provider) => {
+    try {
+      const stmt = db.prepare('DELETE FROM user_mcp_configs WHERE user_id = ? AND provider = ?');
+      const result = stmt.run(userId, provider);
+      return result.changes > 0;
+    } catch (err) {
+      throw err;
+    }
+  }
+};
+
+// User settings database operations
+const userSettingsDb = {
+  // Get a single setting
+  getSetting: (userId, settingKey) => {
+    try {
+      const row = db.prepare('SELECT setting_value FROM user_settings WHERE user_id = ? AND setting_key = ?').get(userId, settingKey);
+      if (!row) {
+        return null;
+      }
+      try {
+        return JSON.parse(row.setting_value);
+      } catch {
+        return row.setting_value;
+      }
+    } catch (err) {
+      throw err;
+    }
+  },
+
+  // Get all settings for a user
+  getAllSettings: (userId) => {
+    try {
+      const rows = db.prepare('SELECT setting_key, setting_value FROM user_settings WHERE user_id = ?').all(userId);
+      const settings = {};
+      for (const row of rows) {
+        try {
+          settings[row.setting_key] = JSON.parse(row.setting_value);
+        } catch {
+          settings[row.setting_key] = row.setting_value;
+        }
+      }
+      return settings;
+    } catch (err) {
+      throw err;
+    }
+  },
+
+  // Set a setting
+  setSetting: (userId, settingKey, settingValue) => {
+    try {
+      const valueJson = typeof settingValue === 'object' ? JSON.stringify(settingValue) : String(settingValue);
+      db.prepare(`
+        INSERT INTO user_settings (user_id, setting_key, setting_value, updated_at)
+        VALUES (?, ?, ?, CURRENT_TIMESTAMP)
+        ON CONFLICT(user_id, setting_key) DO UPDATE SET
+          setting_value = excluded.setting_value,
+          updated_at = CURRENT_TIMESTAMP
+      `).run(userId, settingKey, valueJson);
+      return true;
+    } catch (err) {
+      throw err;
+    }
+  },
+
+  // Delete a setting
+  deleteSetting: (userId, settingKey) => {
+    try {
+      const stmt = db.prepare('DELETE FROM user_settings WHERE user_id = ? AND setting_key = ?');
+      const result = stmt.run(userId, settingKey);
+      return result.changes > 0;
+    } catch (err) {
+      throw err;
+    }
+  }
+};
+
 export {
   db,
   initializeDatabase,
@@ -626,5 +1051,8 @@ export {
   sessionNamesDb,
   applyCustomSessionNames,
   appConfigDb,
-  githubTokensDb // Backward compatibility
+  githubTokensDb, // Backward compatibility
+  userWorkspacesDb,
+  userMcpConfigsDb,
+  userSettingsDb
 };

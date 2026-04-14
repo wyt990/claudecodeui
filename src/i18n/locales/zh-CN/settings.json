@@ -74,6 +74,7 @@
   },
   "terminalShortcuts": {
     "title": "终端快捷键",
+    "paste": "粘贴",
     "sectionKeys": "按键",
     "sectionNavigation": "导航",
     "escape": "Escape",
@@ -96,7 +97,8 @@
     "tasks": "任务",
     "notifications": "通知",
     "plugins": "插件",
-    "about": "关于"
+    "about": "关于",
+    "users": "用户管理"
   },
   "notifications": {
     "title": "通知",
@@ -480,5 +482,57 @@
     "installAriaLabel": "插件 git 仓库 URL",
     "tab": "标签",
     "runningStatus": "运行中"
+  },
+  "userManagement": {
+    "title": "用户管理",
+    "description": "管理用户及其角色。只有管理员可以访问此部分。",
+    "loading": "正在加载用户...",
+    "never": "从未",
+    "you": "(您)",
+    "deleted": "(已删除)",
+    "userCount": "{{count}} 位用户",
+    "addUser": "添加用户",
+    "table": {
+      "user": "用户",
+      "role": "角色",
+      "created": "创建时间",
+      "lastLogin": "最后登录",
+      "actions": "操作"
+    },
+    "roles": {
+      "admin": "管理员",
+      "user": "普通用户"
+    },
+    "addModal": {
+      "title": "添加新用户"
+    },
+    "editModal": {
+      "title": "编辑用户: {{username}}"
+    },
+    "form": {
+      "username": "用户名",
+      "usernamePlaceholder": "输入用户名",
+      "password": "密码",
+      "passwordPlaceholder": "输入密码（至少6个字符）",
+      "role": "角色",
+      "cancel": "取消",
+      "createUser": "创建用户",
+      "updateUser": "更新用户",
+      "delete": "删除",
+      "permanentDelete": "永久删除"
+    },
+    "errors": {
+      "loadFailed": "加载用户失败",
+      "createFailed": "创建用户失败",
+      "updateFailed": "更新用户失败",
+      "deleteFailed": "删除用户失败",
+      "usernamePasswordRequired": "用户名和密码为必填项",
+      "passwordMinLength": "密码必须至少6个字符"
+    },
+    "confirmDeleteTitle": "删除用户",
+    "confirmPermanentDeleteTitle": "永久删除用户",
+    "confirmDeleteMessage": "确定要删除用户 \"{{username}}\" 吗？删除后用户将无法登录。",
+    "confirmPermanentDeleteMessage": "确定要永久删除用户 \"{{username}}\" 吗？此操作无法撤销，用户的所有数据将被清除。",
+    "confirmDelete": "确定要删除此用户吗？此操作无法撤销。"
   }
 }

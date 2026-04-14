@@ -97,20 +97,20 @@ function normalizeSessionName(sessionName) {
   return normalized.length > 80 ? `${normalized.slice(0, 77)}...` : normalized;
 }
 
-function resolveSessionName(event) {
+function resolveSessionName(event, userId) {
   const explicitSessionName = normalizeSessionName(event.meta?.sessionName);
   if (explicitSessionName) {
     return explicitSessionName;
   }
 
-  if (!event.sessionId || !event.provider) {
+  if (!event.sessionId || !event.provider || !userId) {
     return null;
   }
 
-  return normalizeSessionName(sessionNamesDb.getName(event.sessionId, event.provider));
+  return normalizeSessionName(sessionNamesDb.getName(userId, event.sessionId, event.provider));
 }
 
-function buildPushBody(event) {
+function buildPushBody(event, userId) {
   const CODE_MAP = {
     'permission.required': event.meta?.toolName
       ? `Action Required: Tool "${event.meta.toolName}" needs approval`
@@ -121,7 +121,7 @@ function buildPushBody(event) {
     'push.enabled': 'Push notifications are now enabled!'
   };
   const providerLabel = PROVIDER_LABELS[event.provider] || 'Assistant';
-  const sessionName = resolveSessionName(event);
+  const sessionName = resolveSessionName(event, userId);
   const message = CODE_MAP[event.code] || 'You have a new notification';
 
   return {
@@ -141,7 +141,7 @@ async function sendWebPush(userId, event) {
   const subscriptions = pushSubscriptionsDb.getSubscriptions(userId);
   if (!subscriptions.length) return;
 
-  const payload = JSON.stringify(buildPushBody(event));
+  const payload = JSON.stringify(buildPushBody(event, userId));
 
   const results = await Promise.allSettled(
     subscriptions.map((sub) =>

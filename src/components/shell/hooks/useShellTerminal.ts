@@ -2,7 +2,6 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import type { MutableRefObject, RefObject } from 'react';
 import { FitAddon } from '@xterm/addon-fit';
 import { WebLinksAddon } from '@xterm/addon-web-links';
-import { WebglAddon } from '@xterm/addon-webgl';
 import { Terminal } from '@xterm/xterm';
 import type { Project } from '../../../types/app';
 import {
@@ -96,13 +95,56 @@ export function useShellTerminal({
       nextTerminal.loadAddon(new WebLinksAddon());
     }
 
-    try {
-      nextTerminal.loadAddon(new WebglAddon());
-    } catch {
-      console.warn('[Shell] WebGL renderer unavailable, using Canvas fallback');
-    }
+    // Do not load WebglAddon: it stacks WebGL canvases above the IME helper layer and commonly
+    // breaks CJK input (paste still works because it bypasses composition). Default Canvas renderer.
 
     nextTerminal.open(terminalContainerRef.current);
+
+    // xterm.js often does not forward IME commits to `onData` (e.g. when the browser emits
+    // `beforeinput` as `insertText` with non-ASCII, not `insertFromComposition`).
+    // Ctrl+V already sends `{ type: 'input', data }` over the WebSocket; mirror that for IME.
+    const helperTextarea =
+      nextTerminal.textarea ??
+      (terminalContainerRef.current.querySelector('.xterm-helper-textarea') as HTMLTextAreaElement | null);
+
+    const sendImeInputToShell = (text: string) => {
+      if (!text) {
+        return;
+      }
+      sendSocketMessage(wsRef.current, { type: 'input', data: text });
+    };
+
+    const textHasNonAscii = (text: string) =>
+      [...text].some((ch) => (ch.codePointAt(0) ?? 0) > 0x7f);
+
+    const handleImeCommitBeforeInput = (ev: Event) => {
+      const e = ev as InputEvent;
+      const text = e.data;
+      if (!text) {
+        return;
+      }
+
+      if (e.inputType === 'insertFromComposition') {
+        e.preventDefault();
+        sendImeInputToShell(text);
+        return;
+      }
+
+      // Chromium / many Linux IMEs commit each Han character as `insertText` (often isComposing
+      // false); xterm's InputEvent handler can drop these, so they never reach `onData`.
+      if (e.inputType === 'insertText' && textHasNonAscii(text)) {
+        e.preventDefault();
+        sendImeInputToShell(text);
+      }
+    };
+
+    if (helperTextarea) {
+      helperTextarea.setAttribute('autocomplete', 'off');
+      helperTextarea.setAttribute('autocorrect', 'off');
+      helperTextarea.setAttribute('autocapitalize', 'off');
+      helperTextarea.setAttribute('spellcheck', 'false');
+      helperTextarea.addEventListener('beforeinput', handleImeCommitBeforeInput);
+    }
 
     const copyTerminalSelection = async () => {
       const selection = nextTerminal.getSelection();
@@ -136,6 +178,11 @@ export function useShellTerminal({
     terminalContainerRef.current.addEventListener('copy', handleTerminalCopy);
 
     nextTerminal.attachCustomKeyEventHandler((event) => {
+      // Allow IME composition: isComposing, CJK IME "Process" key, or keyCode 229 before compositionstart.
+      if (event.isComposing || event.key === 'Process' || event.keyCode === 229) {
+        return true;
+      }
+
       const activeAuthUrl = isCodexLoginCommand(initialCommandRef.current)
         ? CODEX_DEVICE_AUTH_URL
         : authUrlRef.current;
@@ -243,6 +290,7 @@ export function useShellTerminal({
     resizeObserver.observe(terminalContainerRef.current);
 
     return () => {
+      helperTextarea?.removeEventListener('beforeinput', handleImeCommitBeforeInput);
       terminalContainerRef.current?.removeEventListener('copy', handleTerminalCopy);
       resizeObserver.disconnect();
       if (resizeTimeoutRef.current !== null) {

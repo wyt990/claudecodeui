@@ -74,6 +74,7 @@
   },
   "terminalShortcuts": {
     "title": "터미널 단축키",
+    "paste": "붙여넣기",
     "sectionKeys": "키",
     "sectionNavigation": "탐색",
     "escape": "Escape",

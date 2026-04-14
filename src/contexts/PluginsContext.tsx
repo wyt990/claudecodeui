@@ -1,6 +1,7 @@
 import { createContext, useCallback, useContext, useEffect, useState } from 'react';
 import type { ReactNode } from 'react';
 import { authenticatedFetch } from '../utils/api';
+import { AUTH_TOKEN_STORAGE_KEY } from '../components/auth/constants';
 
 export type Plugin = {
   name: string;
@@ -47,11 +48,23 @@ export function PluginsProvider({ children }: { children: ReactNode }) {
   const [pluginsError, setPluginsError] = useState<string | null>(null);
 
   const refreshPlugins = useCallback(async () => {
+    // Skip if no auth token - user is not logged in
+    const token = localStorage.getItem(AUTH_TOKEN_STORAGE_KEY);
+    if (!token) {
+      setPlugins([]);
+      setLoading(false);
+      return;
+    }
+
     try {
       const res = await authenticatedFetch('/api/plugins');
       if (res.ok) {
         const data = await res.json();
         setPlugins(data.plugins || []);
+        setPluginsError(null);
+      } else if (res.status === 401) {
+        // Silently ignore 401 - user is not logged in
+        setPlugins([]);
         setPluginsError(null);
       } else {
         let errorMessage = `Failed to fetch plugins (${res.status})`;
@@ -66,7 +79,6 @@ export function PluginsProvider({ children }: { children: ReactNode }) {
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Failed to fetch plugins';
       setPluginsError(message);
-      console.error('[Plugins] Failed to fetch plugins:', err);
     } finally {
       setLoading(false);
     }

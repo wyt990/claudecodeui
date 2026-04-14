@@ -18,6 +18,13 @@ import { promises as fs } from 'fs';
 import path from 'path';
 import os from 'os';
 import { CLAUDE_MODELS } from '../shared/modelConstants.js';
+import { getClaudeCodeExecutablePathForSdk } from './utils/claude-cli-detect.js';
+import {
+  isClaudecodeExecutablePath,
+  mergeEnvForClaudecodeSpawn
+} from './utils/claude-list-models-cli.js';
+import { getEnvDefaultOpenAICompatModel, isClaudeOpenAICompatMode } from './utils/claude-openai-env.js';
+import { fetchOpenAIModelIdsOnce } from './utils/claude-openai-models.js';
 import {
   createNotificationEvent,
   notifyRunFailed,
@@ -33,6 +40,86 @@ const pendingToolApprovals = new Map();
 const TOOL_APPROVAL_TIMEOUT_MS = parseInt(process.env.CLAUDE_TOOL_APPROVAL_TIMEOUT_MS, 10) || 55000;
 
 const TOOLS_REQUIRING_INTERACTION = new Set(['AskUserQuestion']);
+
+const PRESET_CLAUDE_MODEL_IDS = new Set(CLAUDE_MODELS.OPTIONS.map((o) => o.value));
+
+async function resolveClaudeSdkModelId(requested) {
+  if (requested === '(default)' || requested === '__claude_code_use_picker_default__') {
+    return requested;
+  }
+  const base = requested || CLAUDE_MODELS.DEFAULT;
+  if (!isClaudeOpenAICompatMode()) {
+    return base;
+  }
+  const sdkExec = getClaudeCodeExecutablePathForSdk();
+  const childIsClaudecode = Boolean(sdkExec && isClaudecodeExecutablePath(sdkExec));
+  // claudecode: do not remap sonnet/opus/haiku using CloudCLI's process.env — that can inject
+  // stale ANTHROPIC_DEFAULT_* (e.g. MiniMax) while the fork's .env points elsewhere. Pass presets
+  // through; we merge the fork/install .env into the SDK child so aliases match the terminal.
+  if (childIsClaudecode && PRESET_CLAUDE_MODEL_IDS.has(base)) {
+    return base;
+  }
+  if (!PRESET_CLAUDE_MODEL_IDS.has(base)) {
+    return base;
+  }
+  const envDefault = getEnvDefaultOpenAICompatModel();
+  if (envDefault) {
+    return envDefault;
+  }
+  const ids = await fetchOpenAIModelIdsOnce();
+  if (ids.length) {
+    return ids[0];
+  }
+  return base;
+}
+
+/**
+ * The Agent SDK runs the Claude Code CLI on the server. Messages like "Please run /login" refer to
+ * Anthropic / Claude Code credentials on that host, not CloudCLI web (JWT) login.
+ */
+function collectClaudeSdkErrorText(error) {
+  const parts = [];
+  let e = error;
+  let depth = 0;
+  while (e && depth < 6) {
+    if (typeof e.message === 'string' && e.message) {
+      parts.push(e.message);
+    }
+    e = e.cause;
+    depth += 1;
+  }
+  return parts.length ? parts.join('\n') : String(error);
+}
+
+function formatClaudeSdkUserFacingError(error) {
+  const raw = collectClaudeSdkErrorText(error);
+  const gatewayModelDenied =
+    /403|one_api|one-api|无权使用模型|API Error|Failed to authenticate/i.test(raw);
+  if (gatewayModelDenied) {
+    return (
+      `${raw}\n\n` +
+      '——\n' +
+      '说明：这是上游聚合 API（如 One API）返回的鉴权/模型权限错误，**不是** CloudCLI 网页账号登录失败；使用 claudecode 时也不一定与 Anthropic `/login` 有关。\n' +
+      '常见原因：当前请求使用的模型 id 不在该令牌允许列表内、或后端进程的环境变量与你在终端运行 claudecode 时不一致。请在对话模型栏选择网关中已授权的模型，或选「Default」使用 claudecode 配置中的默认模型；并确保 CloudCLI 后端为 SDK 子进程合并了与 `claudecode --list-models` 相同的 `.env`（已自动合并安装目录与仓库下的配置）。\n'
+    );
+  }
+  const likelyClaudeCodeAuth =
+    /not logged in|please run\s*\/login|\/login/i.test(raw) ||
+    /Claude Code process exited/i.test(raw);
+  if (likelyClaudeCodeAuth) {
+    const compatNote = isClaudeOpenAICompatMode()
+      ? '\n当前已启用 OpenAI 兼容模式（CLAUDE_CODE_USE_OPENAI_COMPAT_API）：请确认网关 `ANTHROPIC_BASE_URL` 与 `ANTHROPIC_API_KEY` / `ANTHROPIC_AUTH_TOKEN` 可用；若使用本地 claudecode，可设置 `CLAUDE_CODE_EXECUTABLE` 或 `CLAUDE_CODE_ROOT`。\n'
+      : '';
+    return (
+      `${raw}\n\n` +
+      '——\n' +
+      '说明：这是「运行本后端的机器」上 Claude Code 未通过 Anthropic 鉴权导致的，需要在服务器环境执行 `claude` / `claude /login` 或配置 `ANTHROPIC_API_KEY` 等，与网页里 CloudCLI 账号登录无关。\n' +
+      compatNote +
+      '参考：https://code.claude.com/docs'
+    );
+  }
+  return raw;
+}
 
 function createRequestId() {
   if (typeof crypto.randomUUID === 'function') {
@@ -192,10 +279,13 @@ function mapCliOptionsToSDK(options = {}) {
 
   sdkOptions.disallowedTools = settings.disallowedTools || [];
 
-  // Map model (default to sonnet)
-  // Valid models: sonnet, opus, haiku, opusplan, sonnet[1m]
-  sdkOptions.model = options.model || CLAUDE_MODELS.DEFAULT;
-  // Model logged at query start below
+  // Map model (default to sonnet for official CLI). "(default)" = let Claude Code / claudecode use configured default.
+  const rawModel = options.model;
+  if (rawModel === '(default)' || rawModel === '__claude_code_use_picker_default__') {
+    delete sdkOptions.model;
+  } else {
+    sdkOptions.model = rawModel || CLAUDE_MODELS.DEFAULT;
+  }
 
   // Map system prompt configuration
   sdkOptions.systemPrompt = {
@@ -481,8 +571,19 @@ async function queryClaudeSDK(command, options = {}, ws) {
   };
 
   try {
-    // Map CLI options to SDK format
-    const sdkOptions = mapCliOptionsToSDK(options);
+    const resolvedModel = await resolveClaudeSdkModelId(options.model);
+    const sdkOptions = mapCliOptionsToSDK({ ...options, model: resolvedModel });
+
+    const executablePath = getClaudeCodeExecutablePathForSdk();
+    if (executablePath) {
+      sdkOptions.pathToClaudeCodeExecutable = executablePath;
+      if (isClaudecodeExecutablePath(executablePath)) {
+        const merged = mergeEnvForClaudecodeSpawn(executablePath);
+        sdkOptions.env = Object.fromEntries(
+          Object.entries(merged).filter(([, v]) => v !== undefined && v !== null).map(([k, v]) => [k, String(v)])
+        );
+      }
+    }
 
     // Load MCP configuration
     const mcpServers = await loadMcpConfig(options.cwd);
@@ -702,7 +803,12 @@ async function queryClaudeSDK(command, options = {}, ws) {
     await cleanupTempFiles(tempImagePaths, tempDir);
 
     // Send error to WebSocket
-    ws.send(createNormalizedMessage({ kind: 'error', content: error.message, sessionId: capturedSessionId || sessionId || null, provider: 'claude' }));
+    ws.send(createNormalizedMessage({
+      kind: 'error',
+      content: formatClaudeSdkUserFacingError(error),
+      sessionId: capturedSessionId || sessionId || null,
+      provider: 'claude'
+    }));
     notifyRunFailed({
       userId: ws?.userId || null,
       provider: 'claude',

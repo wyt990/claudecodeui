@@ -217,6 +217,70 @@ export const api = {
       }),
   },
 
+  // User management endpoints (admin only)
+  users: {
+    // Get all users
+    getAll: () => authenticatedFetch('/api/auth/users'),
+
+    // Update user
+    update: (userId, updates) =>
+      authenticatedFetch(`/api/auth/users/${userId}`, {
+        method: 'PUT',
+        body: JSON.stringify(updates),
+      }),
+
+    // Delete user (soft delete)
+    delete: (userId) =>
+      authenticatedFetch(`/api/auth/users/${userId}`, {
+        method: 'DELETE',
+      }),
+
+    // Permanently delete user
+    permanentDelete: (userId) =>
+      authenticatedFetch(`/api/auth/users/${userId}/permanent`, {
+        method: 'DELETE',
+      }),
+
+    // Change user password
+    changePassword: (userId, newPassword, currentPassword) =>
+      authenticatedFetch(`/api/auth/users/${userId}/password`, {
+        method: 'PUT',
+        body: JSON.stringify({ newPassword, currentPassword }),
+      }),
+  },
+
+  // User workspaces endpoints
+  workspaces: {
+    // Get all workspaces for current user
+    getAll: () => authenticatedFetch('/api/users/workspaces'),
+
+    // Get default workspace
+    getDefault: () => authenticatedFetch('/api/users/workspaces/default'),
+
+    // Create workspace
+    create: (name, rootPath, isDefault = false) =>
+      authenticatedFetch('/api/users/workspaces', {
+        method: 'POST',
+        body: JSON.stringify({ name, root_path: rootPath, is_default: isDefault }),
+      }),
+
+    // Update workspace
+    update: (workspaceId, updates) =>
+      authenticatedFetch(`/api/users/workspaces/${workspaceId}`, {
+        method: 'PUT',
+        body: JSON.stringify(updates),
+      }),
+
+    // Delete workspace
+    delete: (workspaceId) =>
+      authenticatedFetch(`/api/users/workspaces/${workspaceId}`, {
+        method: 'DELETE',
+      }),
+  },
+
+  /** Resolved `claude` / `claudecode` on server PATH (same as web terminal for Claude). */
+  claudeCliShellBinary: () => authenticatedFetch('/api/cli/claude/shell-binary'),
+
   // Generic GET method for any endpoint
   get: (endpoint) => authenticatedFetch(`/api${endpoint}`),
 

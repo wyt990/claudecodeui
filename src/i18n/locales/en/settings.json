@@ -74,6 +74,7 @@
   },
   "terminalShortcuts": {
     "title": "Terminal Shortcuts",
+    "paste": "Paste",
     "sectionKeys": "Keys",
     "sectionNavigation": "Navigation",
     "escape": "Escape",
@@ -96,7 +97,8 @@
     "tasks": "Tasks",
     "notifications": "Notifications",
     "plugins": "Plugins",
-    "about": "About"
+    "about": "About",
+    "users": "Users"
   },
   "notifications": {
     "title": "Notifications",
@@ -486,5 +488,57 @@
     "installAriaLabel": "Plugin git repository URL",
     "tab": "tab",
     "runningStatus": "running"
+  },
+  "userManagement": {
+    "title": "User Management",
+    "description": "Manage users and their roles. Only administrators can access this section.",
+    "loading": "Loading users...",
+    "never": "Never",
+    "you": "(You)",
+    "deleted": "(Deleted)",
+    "userCount": "{{count}} user(s)",
+    "addUser": "Add User",
+    "table": {
+      "user": "User",
+      "role": "Role",
+      "created": "Created",
+      "lastLogin": "Last Login",
+      "actions": "Actions"
+    },
+    "roles": {
+      "admin": "Admin",
+      "user": "User"
+    },
+    "addModal": {
+      "title": "Add New User"
+    },
+    "editModal": {
+      "title": "Edit User: {{username}}"
+    },
+    "form": {
+      "username": "Username",
+      "usernamePlaceholder": "Enter username",
+      "password": "Password",
+      "passwordPlaceholder": "Enter password (min 6 characters)",
+      "role": "Role",
+      "cancel": "Cancel",
+      "createUser": "Create User",
+      "updateUser": "Update User",
+      "delete": "Delete",
+      "permanentDelete": "Permanently Delete"
+    },
+    "errors": {
+      "loadFailed": "Failed to load users",
+      "createFailed": "Failed to create user",
+      "updateFailed": "Failed to update user",
+      "deleteFailed": "Failed to delete user",
+      "usernamePasswordRequired": "Username and password are required",
+      "passwordMinLength": "Password must be at least 6 characters"
+    },
+    "confirmDeleteTitle": "Delete User",
+    "confirmPermanentDeleteTitle": "Permanently Delete User",
+    "confirmDeleteMessage": "Are you sure you want to delete user \"{{username}}\"? The user will not be able to log in after deletion.",
+    "confirmPermanentDeleteMessage": "Are you sure you want to permanently delete user \"{{username}}\"? This action cannot be undone and all user data will be removed.",
+    "confirmDelete": "Are you sure you want to delete this user? This action cannot be undone."
   }
 }

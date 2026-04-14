@@ -1,5 +1,6 @@
 import React, { createContext, useContext, useState, useEffect } from 'react';
 import { api } from '../utils/api';
+import { AUTH_TOKEN_STORAGE_KEY } from '../components/auth/constants';
 
 const TasksSettingsContext = createContext({
   tasksEnabled: true,
@@ -39,6 +40,15 @@ export const TasksSettingsProvider = ({ children }) => {
   // Check TaskMaster installation status asynchronously on component mount
   useEffect(() => {
     const checkInstallation = async () => {
+      // Skip if no auth token - user is not logged in
+      const token = localStorage.getItem(AUTH_TOKEN_STORAGE_KEY);
+      if (!token) {
+        setIsTaskMasterInstalled(false);
+        setIsTaskMasterReady(false);
+        setIsCheckingInstallation(false);
+        return;
+      }
+
       try {
         const response = await api.get('/taskmaster/installation-status');
         if (response.ok) {
@@ -46,20 +56,22 @@ export const TasksSettingsProvider = ({ children }) => {
           setInstallationStatus(data);
           setIsTaskMasterInstalled(data.installation?.isInstalled || false);
           setIsTaskMasterReady(data.isReady || false);
-          
+
           // If TaskMaster is not installed and user hasn't explicitly enabled tasks,
           // disable tasks automatically
           const userEnabledTasks = localStorage.getItem('tasks-enabled');
           if (!data.installation?.isInstalled && !userEnabledTasks) {
             setTasksEnabled(false);
           }
+        } else if (response.status === 401) {
+          // Silently ignore 401 - user is not logged in
+          setIsTaskMasterInstalled(false);
+          setIsTaskMasterReady(false);
         } else {
-          console.error('Failed to check TaskMaster installation status');
           setIsTaskMasterInstalled(false);
           setIsTaskMasterReady(false);
         }
       } catch (error) {
-        console.error('Error checking TaskMaster installation:', error);
         setIsTaskMasterInstalled(false);
         setIsTaskMasterReady(false);
       } finally {

@@ -67,6 +67,7 @@ function ChatInterface({
     setCursorModel,
     claudeModel,
     setClaudeModel,
+    claudeModelOptions,
     codexModel,
     setCodexModel,
     geminiModel,
@@ -307,6 +308,7 @@ function ChatInterface({
           textareaRef={textareaRef}
           claudeModel={claudeModel}
           setClaudeModel={setClaudeModel}
+          claudeModelOptions={claudeModelOptions}
           cursorModel={cursorModel}
           setCursorModel={setCursorModel}
           codexModel={codexModel}
@@ -340,6 +342,9 @@ function ChatInterface({
         />
 
         <ChatComposer
+          claudeModel={claudeModel}
+          setClaudeModel={setClaudeModel}
+          claudeModelOptions={claudeModelOptions}
           pendingPermissionRequests={pendingPermissionRequests}
           handlePermissionDecision={handlePermissionDecision}
           handleGrantToolPermission={handleGrantToolPermission}

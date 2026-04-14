@@ -9,7 +9,14 @@
     "copied": "메시지 복사됨",
     "selectFormat": "복사 형식 선택",
     "copyAsMarkdown": "마크다운으로 복사",
-    "copyAsText": "텍스트로 복사"
+    "copyAsText": "텍스트로 복사",
+    "textShort": "TXT",
+    "markdownShort": "MD"
+  },
+  "claudeCli": {
+    "shellBinaryBadge": "셸 CLI: {{command}}",
+    "shellBinaryNone": "셸 CLI: 없음",
+    "shellBinaryTitle": "웹 터미널에서 Claude 세션을 시작할 때와 동일한 PATH 해석(claude 우선, 없으면 claudecode). 채팅은 Claude Agent SDK를 사용하며 이 바이너리를 실행하지 않습니다."
   },
   "messageTypes": {
     "user": "U",
@@ -115,6 +122,7 @@
     },
     "clickToChangeMode": "클릭하여 권한 모드 변경 (또는 입력창에서 Tab)",
     "showAllCommands": "모든 명령어 보기",
+    "claudeModel": "모델",
     "clearInput": "입력 지우기",
     "scrollToBottom": "맨 아래로 스크롤"
   },

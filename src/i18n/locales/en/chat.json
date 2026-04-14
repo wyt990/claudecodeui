@@ -9,7 +9,14 @@
     "copied": "Message copied",
     "selectFormat": "Select copy format",
     "copyAsMarkdown": "Copy as markdown",
-    "copyAsText": "Copy as text"
+    "copyAsText": "Copy as text",
+    "textShort": "TXT",
+    "markdownShort": "MD"
+  },
+  "claudeCli": {
+    "shellBinaryBadge": "Shell CLI: {{command}}",
+    "shellBinaryNone": "Shell CLI: not found",
+    "shellBinaryTitle": "Same PATH resolution as the web terminal when starting a Claude session: official claude first, then claudecode. Chat uses the Claude Agent SDK and does not spawn this binary."
   },
   "messageTypes": {
     "user": "U",
@@ -133,6 +140,7 @@
     },
     "clickToChangeMode": "Click to change permission mode (or press Tab in input)",
     "showAllCommands": "Show all commands",
+    "claudeModel": "Model",
     "clearInput": "Clear input",
     "scrollToBottom": "Scroll to bottom"
   },
