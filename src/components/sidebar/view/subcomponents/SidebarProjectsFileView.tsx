@@ -125,7 +125,7 @@ export default function SidebarProjectsFileView({
                   </div>
 
                   {treeOpen && (
-                    <div className="flex min-h-[200px] max-h-[min(52vh,400px)] flex-col border-t border-border/40">
+                    <div className="flex h-[min(52vh,400px)] min-h-[160px] shrink-0 flex-col overflow-hidden border-t border-border/40">
                       <FileTree
                         selectedProject={project}
                         embedded

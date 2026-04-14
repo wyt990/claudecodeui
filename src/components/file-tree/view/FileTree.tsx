@@ -135,7 +135,10 @@ export default function FileTree({
   return (
     <div
       ref={upload.treeRef}
-      className={cn('relative flex flex-col bg-background', embedded ? 'h-full min-h-0' : 'h-full')}
+      className={cn(
+        'relative flex flex-col bg-background',
+        embedded ? 'h-full min-h-0 flex-1 overflow-hidden' : 'h-full',
+      )}
       onDragEnter={upload.handleDragEnter}
       onDragOver={upload.handleDragOver}
       onDragLeave={upload.handleDragLeave}
@@ -151,6 +154,7 @@ export default function FileTree({
         </div>
       )}
 
+      <div className={embedded ? 'shrink-0' : undefined}>
       <FileTreeHeader
         viewMode={effectiveViewMode}
         onViewModeChange={changeViewMode}
@@ -164,10 +168,20 @@ export default function FileTree({
         loading={loading}
         operationLoading={operations.operationLoading}
       />
+      </div>
 
-      {effectiveViewMode === 'detailed' && filteredFiles.length > 0 && <FileTreeDetailedColumns />}
+      {effectiveViewMode === 'detailed' && filteredFiles.length > 0 && (
+        <div className={embedded ? 'shrink-0' : undefined}>
+          <FileTreeDetailedColumns />
+        </div>
+      )}
 
-      <ScrollArea className={cn('px-2 py-1', embedded ? 'min-h-0 flex-1' : 'flex-1')}>
+      <ScrollArea
+        className={cn(
+          'px-2 py-1',
+          embedded ? 'min-h-0 flex-1 basis-0 overflow-hidden' : 'flex-1',
+        )}
+      >
         <FileTreeRootDropSlot onMoveItem={operations.handleMoveItem} />
         {/* New item input */}
         {operations.isCreating && (
