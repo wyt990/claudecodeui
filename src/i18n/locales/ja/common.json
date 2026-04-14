@@ -111,6 +111,7 @@
     "checkProjectPath": "プロジェクトのパスがアクセス可能か確認してください",
     "noMatchesFound": "一致するものが見つかりません",
     "tryDifferentSearch": "別の検索語を試すか、検索をクリアしてください",
+    "dropToMoveToRoot": "ここにドロップしてプロジェクトのルートへ移動",
     "justNow": "たった今",
     "minAgo": "{{count}}分前",
     "hoursAgo": "{{count}}時間前",

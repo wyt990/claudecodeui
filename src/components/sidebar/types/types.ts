@@ -38,6 +38,8 @@ export type SidebarProps = {
   settingsInitialTab: string;
   onCloseSettings: () => void;
   isMobile: boolean;
+  /** Open a project-relative file path in the main editor (Files tab). Second arg requests editor-only layout (hide center file browser). */
+  onOpenProjectFile?: (path: string, options?: { preferEditorOnlyLayout?: boolean }) => void;
 };
 
 export type SessionViewModel = {

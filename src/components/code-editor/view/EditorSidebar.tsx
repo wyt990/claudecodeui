@@ -15,6 +15,8 @@ type EditorSidebarProps = {
   onToggleEditorExpand: () => void;
   projectPath?: string;
   fillSpace?: boolean;
+  /** Center file browser hidden (e.g. sidebar opened file): editor uses full main width */
+  mainPaneHidden?: boolean;
 };
 
 // Minimum width for the left content (file tree, chat, etc.)
@@ -34,6 +36,7 @@ export default function EditorSidebar({
   onToggleEditorExpand,
   projectPath,
   fillSpace,
+  mainPaneHidden = false,
 }: EditorSidebarProps) {
   const [poppedOut, setPoppedOut] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -51,7 +54,7 @@ export default function EditorSidebar({
       const containerWidth = parentElement.clientWidth;
 
       // Calculate maximum allowed editor width
-      const maxEditorWidth = containerWidth - MIN_LEFT_CONTENT_WIDTH;
+      const maxEditorWidth = mainPaneHidden ? containerWidth : containerWidth - MIN_LEFT_CONTENT_WIDTH;
 
       if (maxEditorWidth < MIN_EDITOR_WIDTH) {
         // Not enough space - pop out the editor so user can still see everything
@@ -78,7 +81,7 @@ export default function EditorSidebar({
       window.removeEventListener('resize', updateWidth);
       resizeObserver.disconnect();
     };
-  }, [editingFile, isMobile, poppedOut, editorWidth]);
+  }, [editingFile, isMobile, poppedOut, editorWidth, mainPaneHidden]);
 
   if (!editingFile) {
     return null;
@@ -99,11 +102,14 @@ export default function EditorSidebar({
   }
 
   // In files tab, fill the remaining width unless user has dragged manually.
-  const useFlexLayout = editorExpanded || (fillSpace && !hasManualWidth);
+  const useFlexLayout = editorExpanded || mainPaneHidden || (fillSpace && !hasManualWidth);
 
   return (
-    <div ref={containerRef} className={`flex h-full min-w-0 flex-shrink-0 ${editorExpanded ? 'flex-1' : ''}`}>
-      {!editorExpanded && (
+    <div
+      ref={containerRef}
+      className={`flex h-full min-w-0 flex-shrink-0 ${editorExpanded || mainPaneHidden ? 'flex-1' : ''}`}
+    >
+      {!editorExpanded && !mainPaneHidden && (
         <div
           ref={resizeHandleRef}
           onMouseDown={onResizeStart}

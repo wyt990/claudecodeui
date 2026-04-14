@@ -17,7 +17,8 @@
     "projects": "Projekte",
     "noMatchingProjects": "Keine passenden Projekte",
     "tryDifferentSearch": "Versuch, den Suchbegriff anzupassen",
-    "runClaudeCli": "Führ Claude CLI in einem Projektverzeichnis aus, um zu beginnen"
+    "runClaudeCli": "Führ Claude CLI in einem Projektverzeichnis aus, um zu beginnen",
+    "selectProjectForFiles": "Wähle ein Projekt, um Dateien anzuzeigen"
   },
   "app": {
     "title": "CloudCLI",

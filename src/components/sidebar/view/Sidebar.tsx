@@ -36,6 +36,7 @@ function Sidebar({
   settingsInitialTab,
   onCloseSettings,
   isMobile,
+  onOpenProjectFile,
 }: SidebarProps) {
   const { t } = useTranslation(['sidebar', 'common']);
   const { isPWA } = useDeviceSettings({ trackMobile: false });
@@ -269,11 +270,11 @@ function Sidebar({
             updateAvailable={updateAvailable}
             releaseInfo={releaseInfo}
             latestVersion={latestVersion}
-            currentVersion={currentVersion}
             onShowVersionModal={() => setShowVersionModal(true)}
             onShowSettings={onShowSettings}
             onLogout={() => auth.logout()}
             projectListProps={projectListProps}
+            onOpenProjectFile={onOpenProjectFile}
             t={t}
           />
         </>

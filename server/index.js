@@ -1155,6 +1155,108 @@ app.put('/api/projects/:projectName/files/rename', authenticateToken, async (req
     }
 });
 
+// PUT /api/projects/:projectName/files/move - Move file or directory into another folder (same project)
+app.put('/api/projects/:projectName/files/move', authenticateToken, async (req, res) => {
+    try {
+        const { projectName } = req.params;
+        const { fromPath, toDirectoryPath } = req.body;
+
+        if (!fromPath || typeof fromPath !== 'string' || !fromPath.trim()) {
+            return res.status(400).json({ error: 'fromPath is required' });
+        }
+        if (toDirectoryPath === undefined || toDirectoryPath === null || typeof toDirectoryPath !== 'string') {
+            return res.status(400).json({ error: 'toDirectoryPath is required (use empty string or "." for project root)' });
+        }
+
+        // "" or "." means project root (same as create/upload parentPath)
+        const toDirForValidation = toDirectoryPath === '' || toDirectoryPath === '.' ? '' : toDirectoryPath;
+
+        const projectRoot = await extractProjectDirectory(projectName).catch(() => null);
+        if (!projectRoot) {
+            return res.status(404).json({ error: 'Project not found' });
+        }
+
+        const fromValidation = validatePathInProject(projectRoot, fromPath);
+        if (!fromValidation.valid) {
+            return res.status(403).json({ error: fromValidation.error });
+        }
+        const dirValidation = validatePathInProject(projectRoot, toDirForValidation);
+        if (!dirValidation.valid) {
+            return res.status(403).json({ error: dirValidation.error });
+        }
+
+        const resolvedFrom = fromValidation.resolved;
+        const resolvedDir = dirValidation.resolved;
+
+        let fromStats;
+        try {
+            fromStats = await fsPromises.stat(resolvedFrom);
+        } catch {
+            return res.status(404).json({ error: 'Source not found' });
+        }
+
+        let dirStats;
+        try {
+            dirStats = await fsPromises.stat(resolvedDir);
+        } catch {
+            return res.status(404).json({ error: 'Destination directory not found' });
+        }
+        if (!dirStats.isDirectory()) {
+            return res.status(400).json({ error: 'Destination must be a directory' });
+        }
+
+        if (resolvedFrom === path.resolve(projectRoot)) {
+            return res.status(403).json({ error: 'Cannot move project root' });
+        }
+
+        const baseName = path.basename(resolvedFrom);
+        const resolvedNewPath = path.join(resolvedDir, baseName);
+        const newValidation = validatePathInProject(projectRoot, resolvedNewPath);
+        if (!newValidation.valid) {
+            return res.status(403).json({ error: newValidation.error });
+        }
+
+        if (fromStats.isDirectory()) {
+            const normFrom = resolvedFrom + path.sep;
+            const normNewDir = path.resolve(resolvedDir) + path.sep;
+            if (normNewDir.startsWith(normFrom)) {
+                return res.status(400).json({ error: 'Cannot move a folder into itself or its subfolder' });
+            }
+        }
+
+        if (path.resolve(resolvedFrom) === path.resolve(resolvedNewPath)) {
+            return res.json({ success: true, newPath: resolvedNewPath, message: 'Already in destination' });
+        }
+
+        try {
+            await fsPromises.access(resolvedNewPath);
+            return res.status(409).json({ error: 'A file or folder with this name already exists in the destination' });
+        } catch {
+            /* ok */
+        }
+
+        await fsPromises.rename(resolvedFrom, resolvedNewPath);
+
+        res.json({
+            success: true,
+            oldPath: resolvedFrom,
+            newPath: resolvedNewPath,
+            message: 'Moved successfully'
+        });
+    } catch (error) {
+        console.error('Error moving file/directory:', error);
+        if (error.code === 'EACCES') {
+            res.status(403).json({ error: 'Permission denied' });
+        } else if (error.code === 'ENOENT') {
+            res.status(404).json({ error: 'File or directory not found' });
+        } else if (error.code === 'EXDEV') {
+            res.status(400).json({ error: 'Cannot move across different filesystems' });
+        } else {
+            res.status(500).json({ error: error.message });
+        }
+    }
+});
+
 // DELETE /api/projects/:projectName/files - Delete file or directory
 app.delete('/api/projects/:projectName/files', authenticateToken, async (req, res) => {
     try {

@@ -17,7 +17,8 @@
     "projects": "プロジェクト",
     "noMatchingProjects": "一致するプロジェクトがありません",
     "tryDifferentSearch": "検索語を変えてお試しください",
-    "runClaudeCli": "プロジェクトディレクトリでClaude CLIを実行して始めましょう"
+    "runClaudeCli": "プロジェクトディレクトリでClaude CLIを実行して始めましょう",
+    "selectProjectForFiles": "プロジェクトを選ぶとファイルを表示します"
   },
   "app": {
     "title": "CloudCLI",

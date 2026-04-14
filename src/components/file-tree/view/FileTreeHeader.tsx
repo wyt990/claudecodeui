@@ -9,6 +9,8 @@ type FileTreeHeaderProps = {
   onViewModeChange: (mode: FileTreeViewMode) => void;
   searchQuery: string;
   onSearchQueryChange: (query: string) => void;
+  /** Narrow sidebar: hide view-mode switcher row */
+  compactToolbar?: boolean;
   // Toolbar actions
   onNewFile?: () => void;
   onNewFolder?: () => void;
@@ -24,6 +26,7 @@ export default function FileTreeHeader({
   onViewModeChange,
   searchQuery,
   onSearchQueryChange,
+  compactToolbar = false,
   onNewFile,
   onNewFolder,
   onRefresh,
@@ -34,7 +37,7 @@ export default function FileTreeHeader({
   const { t } = useTranslation();
 
   return (
-    <div className="space-y-2 border-b border-border px-3 pb-2 pt-3">
+    <div className={cn('space-y-2 border-b border-border px-3 pb-2', compactToolbar ? 'pt-2' : 'pt-3')}>
       {/* Title and Toolbar */}
       <div className="flex items-center justify-between">
         <h3 className="text-sm font-medium text-foreground">{t('fileTree.files')}</h3>
@@ -91,39 +94,41 @@ export default function FileTreeHeader({
               <ChevronDown className="h-3.5 w-3.5" />
             </Button>
           )}
-          {/* Divider */}
-          <div className="mx-0.5 h-4 w-px bg-border" />
-          {/* View mode buttons */}
-          <Button
-            variant={viewMode === 'simple' ? 'default' : 'ghost'}
-            size="sm"
-            className="h-7 w-7 p-0"
-            onClick={() => onViewModeChange('simple')}
-            title={t('fileTree.simpleView')}
-            aria-label={t('fileTree.simpleView')}
-          >
-            <List className="h-3.5 w-3.5" />
-          </Button>
-          <Button
-            variant={viewMode === 'compact' ? 'default' : 'ghost'}
-            size="sm"
-            className="h-7 w-7 p-0"
-            onClick={() => onViewModeChange('compact')}
-            title={t('fileTree.compactView')}
-            aria-label={t('fileTree.compactView')}
-          >
-            <Eye className="h-3.5 w-3.5" />
-          </Button>
-          <Button
-            variant={viewMode === 'detailed' ? 'default' : 'ghost'}
-            size="sm"
-            className="h-7 w-7 p-0"
-            onClick={() => onViewModeChange('detailed')}
-            title={t('fileTree.detailedView')}
-            aria-label={t('fileTree.detailedView')}
-          >
-            <TableProperties className="h-3.5 w-3.5" />
-          </Button>
+          {!compactToolbar && (
+            <>
+              <div className="mx-0.5 h-4 w-px bg-border" />
+              <Button
+                variant={viewMode === 'simple' ? 'default' : 'ghost'}
+                size="sm"
+                className="h-7 w-7 p-0"
+                onClick={() => onViewModeChange('simple')}
+                title={t('fileTree.simpleView')}
+                aria-label={t('fileTree.simpleView')}
+              >
+                <List className="h-3.5 w-3.5" />
+              </Button>
+              <Button
+                variant={viewMode === 'compact' ? 'default' : 'ghost'}
+                size="sm"
+                className="h-7 w-7 p-0"
+                onClick={() => onViewModeChange('compact')}
+                title={t('fileTree.compactView')}
+                aria-label={t('fileTree.compactView')}
+              >
+                <Eye className="h-3.5 w-3.5" />
+              </Button>
+              <Button
+                variant={viewMode === 'detailed' ? 'default' : 'ghost'}
+                size="sm"
+                className="h-7 w-7 p-0"
+                onClick={() => onViewModeChange('detailed')}
+                title={t('fileTree.detailedView')}
+                aria-label={t('fileTree.detailedView')}
+              >
+                <TableProperties className="h-3.5 w-3.5" />
+              </Button>
+            </>
+          )}
         </div>
       </div>
 

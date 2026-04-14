@@ -1,4 +1,4 @@
-import React, { useEffect } from 'react';
+import React, { useCallback, useEffect, useState, type Dispatch, type SetStateAction } from 'react';
 import ChatInterface from '../../chat/view/ChatInterface';
 import FileTree from '../../file-tree/view/FileTree';
 import StandaloneShell from '../../standalone-shell/view/StandaloneShell';
@@ -10,7 +10,8 @@ import { useTasksSettings } from '../../../contexts/TasksSettingsContext';
 import { useUiPreferences } from '../../../hooks/useUiPreferences';
 import { useEditorSidebar } from '../../code-editor/hooks/useEditorSidebar';
 import EditorSidebar from '../../code-editor/view/EditorSidebar';
-import type { Project } from '../../../types/app';
+import { cn } from '../../../lib/utils';
+import type { AppTab, Project } from '../../../types/app';
 import { TaskMasterPanel } from '../../task-master';
 import MainContentHeader from './subcomponents/MainContentHeader';
 import MainContentStateView from './subcomponents/MainContentStateView';
@@ -72,6 +73,57 @@ function MainContent({
     isMobile,
   });
 
+  const [filesLayoutEditorFocus, setFilesLayoutEditorFocus] = useState(false);
+
+  const handleTabChange = useCallback<Dispatch<SetStateAction<AppTab>>>((tab) => {
+    if (typeof tab === 'function') {
+      setActiveTab((prev) => {
+        const next = tab(prev);
+        if (next === 'files') {
+          queueMicrotask(() => setFilesLayoutEditorFocus(false));
+        }
+        return next;
+      });
+      return;
+    }
+    if (tab === 'files') {
+      setFilesLayoutEditorFocus(false);
+    }
+    setActiveTab(tab);
+  }, [setActiveTab]);
+
+  useEffect(() => {
+    if (activeTab !== 'files') {
+      setFilesLayoutEditorFocus(false);
+    }
+  }, [activeTab]);
+
+  useEffect(() => {
+    if (!editingFile && filesLayoutEditorFocus) {
+      setFilesLayoutEditorFocus(false);
+    }
+  }, [editingFile, filesLayoutEditorFocus]);
+
+  useEffect(() => {
+    const onOpenProjectFile = (event: Event) => {
+      const detail = (event as CustomEvent<{ path?: string; preferEditorOnlyLayout?: boolean }>).detail;
+      const path = detail?.path;
+      if (typeof path !== 'string' || !path.trim()) {
+        return;
+      }
+      if (detail?.preferEditorOnlyLayout) {
+        setFilesLayoutEditorFocus(true);
+      } else {
+        setFilesLayoutEditorFocus(false);
+      }
+      setActiveTab('files');
+      handleFileOpen(path);
+    };
+
+    window.addEventListener('cloudcli:open-file', onOpenProjectFile);
+    return () => window.removeEventListener('cloudcli:open-file', onOpenProjectFile);
+  }, [handleFileOpen, setActiveTab]);
+
   useEffect(() => {
     const selectedProjectName = selectedProject?.name;
     const currentProjectName = currentProject?.name;
@@ -95,11 +147,13 @@ function MainContent({
     return <MainContentStateView mode="empty" isMobile={isMobile} onMenuClick={onMenuClick} />;
   }
 
+  const hideMainFilePane = filesLayoutEditorFocus && activeTab === 'files';
+
   return (
     <div className="flex h-full flex-col">
       <MainContentHeader
         activeTab={activeTab}
-        setActiveTab={setActiveTab}
+        setActiveTab={handleTabChange}
         selectedProject={selectedProject}
         selectedSession={selectedSession}
         shouldShowTasksTab={shouldShowTasksTab}
@@ -108,7 +162,12 @@ function MainContent({
       />
 
       <div className="flex min-h-0 flex-1 overflow-hidden">
-        <div className={`flex min-h-0 min-w-[200px] flex-col overflow-hidden ${editorExpanded ? 'hidden' : ''} flex-1`}>
+        <div
+          className={cn(
+            'flex min-h-0 min-w-[200px] flex-1 flex-col overflow-hidden',
+            (editorExpanded || hideMainFilePane) && 'hidden',
+          )}
+        >
           <div className={`h-full ${activeTab === 'chat' ? 'block' : 'hidden'}`}>
             <ErrorBoundary showDetails>
               <ChatInterface
@@ -188,6 +247,7 @@ function MainContent({
           onToggleEditorExpand={handleToggleEditorExpand}
           projectPath={selectedProject.path}
           fillSpace={activeTab === 'files'}
+          mainPaneHidden={hideMainFilePane}
         />
       </div>
     </div>

@@ -111,6 +111,7 @@
     "checkProjectPath": "Überprüf, ob der Projektpfad zugänglich ist",
     "noMatchesFound": "Keine Treffer gefunden",
     "tryDifferentSearch": "Versuch einen anderen Suchbegriff oder leere die Suche",
+    "dropToMoveToRoot": "Hier ablegen, um ins Projektstammverzeichnis zu verschieben",
     "justNow": "gerade eben",
     "minAgo": "vor {{count}} Min.",
     "hoursAgo": "vor {{count}} Std.",

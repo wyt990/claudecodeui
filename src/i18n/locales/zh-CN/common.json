@@ -111,6 +111,7 @@
     "checkProjectPath": "检查项目路径是否可访问",
     "noMatchesFound": "未找到匹配项",
     "tryDifferentSearch": "尝试不同的搜索词或清除搜索",
+    "dropToMoveToRoot": "拖放到此处可移动到项目根目录",
     "justNow": "刚刚",
     "minAgo": "{{count}} 分钟前",
     "hoursAgo": "{{count}} 小时前",

@@ -17,15 +17,25 @@ import FileTreeBody from './FileTreeBody';
 import FileTreeDetailedColumns from './FileTreeDetailedColumns';
 import FileTreeHeader from './FileTreeHeader';
 import FileTreeLoadingState from './FileTreeLoadingState';
+import FileTreeRootDropSlot from './FileTreeRootDropSlot';
 import ImageViewer from './ImageViewer';
 
 
 type FileTreeProps = {
   selectedProject: Project | null;
   onFileOpen?: (filePath: string) => void;
+  /** Sidebar project tab: compact header, simple list, fills parent flex height */
+  embedded?: boolean;
+  /** When set with embedded: non-image files open on double-click only (sidebar vs main file tab UX) */
+  openTextFilesOnDoubleClick?: boolean;
 };
 
-export default function FileTree({ selectedProject, onFileOpen }: FileTreeProps) {
+export default function FileTree({
+  selectedProject,
+  onFileOpen,
+  embedded = false,
+  openTextFilesOnDoubleClick = false,
+}: FileTreeProps) {
   const { t } = useTranslation();
   const [selectedImage, setSelectedImage] = useState<FileTreeImageSelection | null>(null);
   const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
@@ -47,6 +57,8 @@ export default function FileTree({ selectedProject, onFileOpen }: FileTreeProps)
 
   const { files, loading, refreshFiles } = useFileTreeData(selectedProject);
   const { viewMode, changeViewMode } = useFileTreeViewMode();
+  const effectiveViewMode = embedded ? 'simple' : viewMode;
+
   const { expandedDirs, toggleDirectory, expandDirectories, collapseAll } = useExpandedDirectories();
   const { searchQuery, setSearchQuery, filteredFiles } = useFileTreeSearch({
     files,
@@ -123,7 +135,7 @@ export default function FileTree({ selectedProject, onFileOpen }: FileTreeProps)
   return (
     <div
       ref={upload.treeRef}
-      className="relative flex h-full flex-col bg-background"
+      className={cn('relative flex flex-col bg-background', embedded ? 'h-full min-h-0' : 'h-full')}
       onDragEnter={upload.handleDragEnter}
       onDragOver={upload.handleDragOver}
       onDragLeave={upload.handleDragLeave}
@@ -140,10 +152,11 @@ export default function FileTree({ selectedProject, onFileOpen }: FileTreeProps)
       )}
 
       <FileTreeHeader
-        viewMode={viewMode}
+        viewMode={effectiveViewMode}
         onViewModeChange={changeViewMode}
         searchQuery={searchQuery}
         onSearchQueryChange={setSearchQuery}
+        compactToolbar={embedded}
         onNewFile={() => operations.handleStartCreate('', 'file')}
         onNewFolder={() => operations.handleStartCreate('', 'directory')}
         onRefresh={refreshFiles}
@@ -152,9 +165,10 @@ export default function FileTree({ selectedProject, onFileOpen }: FileTreeProps)
         operationLoading={operations.operationLoading}
       />
 
-      {viewMode === 'detailed' && filteredFiles.length > 0 && <FileTreeDetailedColumns />}
+      {effectiveViewMode === 'detailed' && filteredFiles.length > 0 && <FileTreeDetailedColumns />}
 
-      <ScrollArea className="flex-1 px-2 py-1">
+      <ScrollArea className={cn('px-2 py-1', embedded ? 'min-h-0 flex-1' : 'flex-1')}>
+        <FileTreeRootDropSlot onMoveItem={operations.handleMoveItem} />
         {/* New item input */}
         {operations.isCreating && (
           <div
@@ -191,9 +205,10 @@ export default function FileTree({ selectedProject, onFileOpen }: FileTreeProps)
           files={files}
           filteredFiles={filteredFiles}
           searchQuery={searchQuery}
-          viewMode={viewMode}
+          viewMode={effectiveViewMode}
           expandedDirs={expandedDirs}
           onItemClick={handleItemClick}
+          openTextFilesOnDoubleClick={Boolean(embedded && openTextFilesOnDoubleClick)}
           renderFileIcon={renderFileIcon}
           formatFileSize={formatFileSize}
           formatRelativeTime={formatRelativeTimeLabel}
@@ -204,6 +219,7 @@ export default function FileTree({ selectedProject, onFileOpen }: FileTreeProps)
           onCopyPath={operations.handleCopyPath}
           onDownload={operations.handleDownload}
           onRefresh={refreshFiles}
+          onMoveItem={operations.handleMoveItem}
           // Pass rename state and handlers for inline editing
           renamingItem={operations.renamingItem}
           renameValue={operations.renameValue}

@@ -8,6 +8,7 @@ import type { ConversationSearchResults, SearchProgress } from '../../hooks/useS
 import SidebarFooter from './SidebarFooter';
 import SidebarHeader from './SidebarHeader';
 import SidebarProjectList, { type SidebarProjectListProps } from './SidebarProjectList';
+import SidebarProjectsFileView from './SidebarProjectsFileView';
 
 type SearchMode = 'projects' | 'conversations';
 
@@ -56,11 +57,11 @@ type SidebarContentProps = {
   updateAvailable: boolean;
   releaseInfo: ReleaseInfo | null;
   latestVersion: string | null;
-  currentVersion: string;
   onShowVersionModal: () => void;
   onShowSettings: () => void;
   onLogout?: () => void;
   projectListProps: SidebarProjectListProps;
+  onOpenProjectFile?: (path: string, options?: { preferEditorOnlyLayout?: boolean }) => void;
   t: TFunction;
 };
 
@@ -85,11 +86,11 @@ export default function SidebarContent({
   updateAvailable,
   releaseInfo,
   latestVersion,
-  currentVersion,
   onShowVersionModal,
   onShowSettings,
   onLogout,
   projectListProps,
+  onOpenProjectFile,
   t,
 }: SidebarContentProps) {
   const showConversationSearch = searchMode === 'conversations' && searchFilter.trim().length >= 2;
@@ -117,9 +118,9 @@ export default function SidebarContent({
         t={t}
       />
 
-      <ScrollArea className="flex-1 overflow-y-auto overscroll-contain md:px-1.5 md:py-2">
-        {showConversationSearch ? (
-          isSearching && !hasPartialResults ? (
+      {showConversationSearch ? (
+        <ScrollArea className="flex-1 overflow-y-auto overscroll-contain md:px-1.5 md:py-2">
+          {isSearching && !hasPartialResults ? (
             <div className="px-4 py-12 text-center md:py-8">
               <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-lg bg-muted md:mb-3">
                 <div className="h-6 w-6 animate-spin rounded-full border-2 border-muted-foreground border-t-transparent" />
@@ -211,17 +212,33 @@ export default function SidebarContent({
                 </div>
               ))}
             </div>
-          ) : null
-        ) : (
+          ) : null}
+        </ScrollArea>
+      ) : searchMode === 'projects' ? (
+        <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
+          <SidebarProjectsFileView
+            projects={projects}
+            filteredProjects={projectListProps.filteredProjects}
+            selectedProject={projectListProps.selectedProject}
+            isLoading={projectListProps.isLoading}
+            loadingProgress={projectListProps.loadingProgress}
+            isProjectStarred={projectListProps.isProjectStarred}
+            onProjectSelect={projectListProps.onProjectSelect}
+            onToggleStarProject={projectListProps.onToggleStarProject}
+            onOpenProjectFile={onOpenProjectFile}
+            t={t}
+          />
+        </div>
+      ) : (
+        <ScrollArea className="flex-1 overflow-y-auto overscroll-contain md:px-1.5 md:py-2">
           <SidebarProjectList {...projectListProps} />
-        )}
-      </ScrollArea>
+        </ScrollArea>
+      )}
 
       <SidebarFooter
         updateAvailable={updateAvailable}
         releaseInfo={releaseInfo}
         latestVersion={latestVersion}
-        currentVersion={currentVersion}
         onShowVersionModal={onShowVersionModal}
         onShowSettings={onShowSettings}
         onLogout={onLogout}

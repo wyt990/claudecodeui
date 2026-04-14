@@ -505,6 +505,12 @@ export function useProjectsState({
     [navigate, selectedProject?.name],
   );
 
+  const handleOpenProjectFile = useCallback((path: string, options?: { preferEditorOnlyLayout?: boolean }) => {
+    window.dispatchEvent(
+      new CustomEvent('cloudcli:open-file', { detail: { path, preferEditorOnlyLayout: options?.preferEditorOnlyLayout } }),
+    );
+  }, []);
+
   const sidebarSharedProps = useMemo(
     () => ({
       projects,
@@ -523,9 +529,11 @@ export function useProjectsState({
       settingsInitialTab,
       onCloseSettings: () => setShowSettings(false),
       isMobile,
+      onOpenProjectFile: handleOpenProjectFile,
     }),
     [
       handleNewSession,
+      handleOpenProjectFile,
       handleProjectDelete,
       handleProjectSelect,
       handleSessionDelete,

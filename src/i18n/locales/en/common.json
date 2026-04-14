@@ -111,6 +111,7 @@
     "checkProjectPath": "Check if the project path is accessible",
     "noMatchesFound": "No matches found",
     "tryDifferentSearch": "Try a different search term or clear the search",
+    "dropToMoveToRoot": "Drop here to move to project root",
     "justNow": "just now",
     "minAgo": "{{count}} min ago",
     "hoursAgo": "{{count}} hours ago",

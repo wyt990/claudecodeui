@@ -1,6 +1,7 @@
 import { useCallback, useState, useRef } from 'react';
 import type { Project } from '../../../types/app';
 import { api } from '../../../utils/api';
+import { isFileTreeInternalDrag } from '../constants/constants';
 
 type UseFileTreeUploadOptions = {
   selectedProject: Project | null;
@@ -68,12 +69,18 @@ export const useFileTreeUpload = ({
   const treeRef = useRef<HTMLDivElement>(null);
 
   const handleDragEnter = useCallback((e: React.DragEvent) => {
+    if (isFileTreeInternalDrag(e.dataTransfer)) {
+      return;
+    }
     e.preventDefault();
     e.stopPropagation();
     setIsDragOver(true);
   }, []);
 
   const handleDragOver = useCallback((e: React.DragEvent) => {
+    if (isFileTreeInternalDrag(e.dataTransfer)) {
+      return;
+    }
     e.preventDefault();
     e.stopPropagation();
   }, []);
@@ -92,6 +99,11 @@ export const useFileTreeUpload = ({
     e.preventDefault();
     e.stopPropagation();
     setIsDragOver(false);
+
+    if (isFileTreeInternalDrag(e.dataTransfer)) {
+      setDropTarget(null);
+      return;
+    }
 
     const targetPath = dropTarget || '';
     setOperationLoading(true);

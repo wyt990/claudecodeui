@@ -53,6 +53,7 @@ export type UseFileTreeOperationsResult = {
   // Other operations
   handleCopyPath: (item: FileTreeNode) => void;
   handleDownload: (item: FileTreeNode) => Promise<void>;
+  handleMoveItem: (fromPath: string, toDirectoryPath: string) => Promise<void>;
 
   // Loading state
   operationLoading: boolean;
@@ -239,6 +240,42 @@ export function useFileTreeOperations({
   }, [selectedProject, newItemParent, newItemType, newItemName, validateFilename, showToast, t, onRefresh, handleCancelCreate]);
 
   // Copy path to clipboard
+  const handleMoveItem = useCallback(
+    async (fromPath: string, toDirectoryPath: string) => {
+      if (!selectedProject) return;
+
+      const fromNorm = fromPath.replace(/\\/g, '/');
+      const toRaw = toDirectoryPath.replace(/\\/g, '/').replace(/\/$/, '');
+      const toNorm = toRaw === '.' ? '' : toRaw;
+      const lastSlash = fromNorm.lastIndexOf('/');
+      const parent = lastSlash <= 0 ? '' : fromNorm.slice(0, lastSlash);
+      if (parent === toNorm) {
+        return;
+      }
+
+      setOperationLoading(true);
+      try {
+        const response = await api.moveFile(selectedProject.name, {
+          fromPath,
+          toDirectoryPath: toNorm,
+        });
+
+        if (!response.ok) {
+          const data = await response.json();
+          throw new Error(data.error || 'Failed to move');
+        }
+
+        showToast(t('fileTree.toast.moved', 'Moved successfully'), 'success');
+        onRefresh();
+      } catch (err) {
+        showToast((err as Error).message, 'error');
+      } finally {
+        setOperationLoading(false);
+      }
+    },
+    [selectedProject, showToast, t, onRefresh],
+  );
+
   const handleCopyPath = useCallback((item: FileTreeNode) => {
     navigator.clipboard.writeText(item.path).catch(() => {
       // Clipboard API may fail in some contexts (e.g., non-HTTPS)
@@ -366,6 +403,7 @@ export function useFileTreeOperations({
     // Other operations
     handleCopyPath,
     handleDownload,
+    handleMoveItem,
 
     // Loading state
     operationLoading,

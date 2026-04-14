@@ -7,6 +7,7 @@ type FileTreeListProps = {
   viewMode: FileTreeViewMode;
   expandedDirs: Set<string>;
   onItemClick: (item: FileTreeNodeType) => void;
+  openTextFilesOnDoubleClick?: boolean;
   renderFileIcon: (filename: string) => ReactNode;
   formatFileSize: (bytes?: number) => string;
   formatRelativeTime: (date?: string) => string;
@@ -17,6 +18,7 @@ type FileTreeListProps = {
   onCopyPath?: (item: FileTreeNodeType) => void;
   onDownload?: (item: FileTreeNodeType) => void;
   onRefresh?: () => void;
+  onMoveItem?: (fromPath: string, toDirectoryPath: string) => void;
   // Rename state for inline editing
   renamingItem?: FileTreeNodeType | null;
   renameValue?: string;
@@ -32,6 +34,7 @@ export default function FileTreeList({
   viewMode,
   expandedDirs,
   onItemClick,
+  openTextFilesOnDoubleClick = false,
   renderFileIcon,
   formatFileSize,
   formatRelativeTime,
@@ -42,6 +45,7 @@ export default function FileTreeList({
   onCopyPath,
   onDownload,
   onRefresh,
+  onMoveItem,
   renamingItem,
   renameValue,
   setRenameValue,
@@ -60,6 +64,7 @@ export default function FileTreeList({
           viewMode={viewMode}
           expandedDirs={expandedDirs}
           onItemClick={onItemClick}
+          openTextFilesOnDoubleClick={openTextFilesOnDoubleClick}
           renderFileIcon={renderFileIcon}
           formatFileSize={formatFileSize}
           formatRelativeTime={formatRelativeTime}
@@ -70,6 +75,7 @@ export default function FileTreeList({
           onCopyPath={onCopyPath}
           onDownload={onDownload}
           onRefresh={onRefresh}
+          onMoveItem={onMoveItem}
           renamingItem={renamingItem}
           renameValue={renameValue}
           setRenameValue={setRenameValue}

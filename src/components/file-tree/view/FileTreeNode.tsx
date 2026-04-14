@@ -1,7 +1,10 @@
-import type { ReactNode, RefObject } from 'react';
+import type { DragEvent as ReactDragEvent, ReactNode, RefObject } from 'react';
 import { ChevronRight, Folder, FolderOpen } from 'lucide-react';
 import { cn } from '../../../lib/utils';
 import type { FileTreeNode as FileTreeNodeType, FileTreeViewMode } from '../types/types';
+import { isImageFile } from '../utils/fileTreeUtils';
+import { FILE_TREE_INTERNAL_DRAG_MIME, isFileTreeInternalDrag } from '../constants/constants';
+import { canApplyTreeMove } from '../utils/treeMove';
 import { Input } from '../../../shared/view/ui';
 import FileContextMenu from './FileContextMenu';
 
@@ -11,6 +14,7 @@ type FileTreeNodeProps = {
   viewMode: FileTreeViewMode;
   expandedDirs: Set<string>;
   onItemClick: (item: FileTreeNodeType) => void;
+  openTextFilesOnDoubleClick?: boolean;
   renderFileIcon: (filename: string) => ReactNode;
   formatFileSize: (bytes?: number) => string;
   formatRelativeTime: (date?: string) => string;
@@ -21,6 +25,7 @@ type FileTreeNodeProps = {
   onCopyPath?: (item: FileTreeNodeType) => void;
   onDownload?: (item: FileTreeNodeType) => void;
   onRefresh?: () => void;
+  onMoveItem?: (fromPath: string, toDirectoryPath: string) => void | Promise<void>;
   // Rename state for inline editing
   renamingItem?: FileTreeNodeType | null;
   renameValue?: string;
@@ -65,6 +70,7 @@ export default function FileTreeNode({
   viewMode,
   expandedDirs,
   onItemClick,
+  openTextFilesOnDoubleClick = false,
   renderFileIcon,
   formatFileSize,
   formatRelativeTime,
@@ -75,6 +81,7 @@ export default function FileTreeNode({
   onCopyPath,
   onDownload,
   onRefresh,
+  onMoveItem,
   renamingItem,
   renameValue,
   setRenameValue,
@@ -87,6 +94,50 @@ export default function FileTreeNode({
   const isOpen = isDirectory && expandedDirs.has(item.path);
   const hasChildren = Boolean(isDirectory && item.children && item.children.length > 0);
   const isRenaming = renamingItem?.path === item.path;
+  const deferTextOpenToDoubleClick =
+    openTextFilesOnDoubleClick && !isDirectory && !isImageFile(item.name);
+
+  const handleRowClick = () => {
+    if (deferTextOpenToDoubleClick) {
+      return;
+    }
+    onItemClick(item);
+  };
+
+  const handleRowDoubleClick = () => {
+    if (deferTextOpenToDoubleClick) {
+      onItemClick(item);
+    }
+  };
+
+  const handleRowDragStart = (e: ReactDragEvent) => {
+    if (!onMoveItem) {
+      return;
+    }
+    e.dataTransfer.setData(FILE_TREE_INTERNAL_DRAG_MIME, item.path);
+    e.dataTransfer.effectAllowed = 'move';
+  };
+
+  const handleFolderDragOver = (e: ReactDragEvent) => {
+    if (!onMoveItem || !isDirectory || !isFileTreeInternalDrag(e.dataTransfer)) {
+      return;
+    }
+    e.preventDefault();
+    e.stopPropagation();
+  };
+
+  const handleFolderDrop = (e: ReactDragEvent) => {
+    if (!onMoveItem || !isDirectory || !isFileTreeInternalDrag(e.dataTransfer)) {
+      return;
+    }
+    e.preventDefault();
+    e.stopPropagation();
+    const fromPath = e.dataTransfer.getData(FILE_TREE_INTERNAL_DRAG_MIME);
+    if (!fromPath || !canApplyTreeMove(fromPath, item.path)) {
+      return;
+    }
+    void onMoveItem(fromPath, item.path);
+  };
 
   const nameClassName = cn(
     'text-[13px] leading-tight truncate',
@@ -139,7 +190,12 @@ export default function FileTreeNode({
     <div
       className={rowClassName}
       style={{ paddingLeft: `${level * 16 + 4}px` }}
-      onClick={() => onItemClick(item)}
+      onClick={handleRowClick}
+      onDoubleClick={handleRowDoubleClick}
+      draggable={Boolean(onMoveItem)}
+      onDragStart={handleRowDragStart}
+      onDragOver={isDirectory ? handleFolderDragOver : undefined}
+      onDrop={isDirectory ? handleFolderDrop : undefined}
     >
       {viewMode === 'detailed' ? (
         <>
@@ -214,6 +270,7 @@ export default function FileTreeNode({
               viewMode={viewMode}
               expandedDirs={expandedDirs}
               onItemClick={onItemClick}
+              openTextFilesOnDoubleClick={openTextFilesOnDoubleClick}
               renderFileIcon={renderFileIcon}
               formatFileSize={formatFileSize}
               formatRelativeTime={formatRelativeTime}
@@ -224,6 +281,7 @@ export default function FileTreeNode({
               onCopyPath={onCopyPath}
               onDownload={onDownload}
               onRefresh={onRefresh}
+              onMoveItem={onMoveItem}
               renamingItem={renamingItem}
               renameValue={renameValue}
               setRenameValue={setRenameValue}
