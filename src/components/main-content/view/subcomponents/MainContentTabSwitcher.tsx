@@ -10,6 +10,8 @@ type MainContentTabSwitcherProps = {
   activeTab: AppTab;
   setActiveTab: Dispatch<SetStateAction<AppTab>>;
   shouldShowTasksTab: boolean;
+  /** 远程环境下禁用除「聊天」外的本机主区 Tab（插件/文件/终端/Git/任务等，见方案 §7.1） */
+  isRemoteTarget: boolean;
 };
 
 type BuiltInTab = {
@@ -43,10 +45,21 @@ const TASKS_TAB: BuiltInTab = {
   icon: ClipboardCheck,
 };
 
+function isTabBlockedByRemoteMode(tab: TabDefinition, isRemoteTarget: boolean): boolean {
+  if (!isRemoteTarget) {
+    return false;
+  }
+  if (tab.id === 'chat' || tab.id === 'preview') {
+    return false;
+  }
+  return true;
+}
+
 export default function MainContentTabSwitcher({
   activeTab,
   setActiveTab,
   shouldShowTasksTab,
+  isRemoteTarget,
 }: MainContentTabSwitcherProps) {
   const { t } = useTranslation();
   const { plugins } = usePlugins();
@@ -70,12 +83,15 @@ export default function MainContentTabSwitcher({
       {tabs.map((tab) => {
         const isActive = tab.id === activeTab;
         const displayLabel = tab.kind === 'builtin' ? t(tab.labelKey) : tab.label;
+        const blocked = isTabBlockedByRemoteMode(tab, isRemoteTarget);
+        const tip = blocked ? `${displayLabel} — ${t('remoteTarget.tabDisabled')}` : displayLabel;
 
         return (
-          <Tooltip key={tab.id} content={displayLabel} position="bottom">
+          <Tooltip key={tab.id} content={tip} position="bottom">
             <Pill
               isActive={isActive}
-              onClick={() => setActiveTab(tab.id)}
+              onClick={() => (blocked ? undefined : setActiveTab(tab.id))}
+              disabled={blocked}
               className="px-2.5 py-[5px]"
             >
               {tab.kind === 'builtin' ? (

@@ -23,6 +23,7 @@ import type { Project, ProjectSession, SessionProvider } from '../../../types/ap
 import { escapeRegExp } from '../utils/chatFormatting';
 import { useFileMentions } from './useFileMentions';
 import { type SlashCommand, useSlashCommands } from './useSlashCommands';
+import { useEnvironment } from '../../../contexts/EnvironmentContext';
 
 type PendingViewSession = {
   sessionId: string | null;
@@ -60,6 +61,8 @@ interface UseChatComposerStateArgs {
   setClaudeStatus: (status: { text: string; tokens: number; can_interrupt: boolean } | null) => void;
   setIsUserScrolledUp: (isScrolledUp: boolean) => void;
   setPendingPermissionRequests: Dispatch<SetStateAction<PendingPermissionRequest[]>>;
+  /** 远程目标（P1）仅拉取历史，不发起 CLI/WebSocket 对话 */
+  isRemoteReadOnly?: boolean;
 }
 
 interface MentionableFile {
@@ -132,7 +135,9 @@ export function useChatComposerState({
   setClaudeStatus,
   setIsUserScrolledUp,
   setPendingPermissionRequests,
+  isRemoteReadOnly = false,
 }: UseChatComposerStateArgs) {
+  const { isRemote, currentTarget, targetKey } = useEnvironment();
   const [input, setInput] = useState(() => {
     if (typeof window !== 'undefined' && selectedProject) {
       return safeLocalStorage.getItem(`draft_input_${selectedProject.name}`) || '';
@@ -462,6 +467,9 @@ export function useChatComposerState({
       event: FormEvent<HTMLFormElement> | MouseEvent | TouchEvent | KeyboardEvent<HTMLTextAreaElement>,
     ) => {
       event.preventDefault();
+      if (isRemoteReadOnly) {
+        return;
+      }
       const currentInput = inputValueRef.current;
       if (!currentInput.trim() || isLoading || !selectedProject) {
         return;
@@ -639,6 +647,7 @@ export function useChatComposerState({
           },
         });
       } else {
+        const remoteSshClaude = isRemote && provider === 'claude' && currentTarget.kind === 'remote';
         sendMessage({
           type: 'claude-command',
           command: messageContent,
@@ -652,6 +661,13 @@ export function useChatComposerState({
             model: claudeModel,
             sessionSummary,
             images: uploadedImages,
+            ...(remoteSshClaude
+              ? {
+                  useRemoteSsh: true,
+                  serverId: currentTarget.serverId,
+                  targetKey,
+                }
+              : {}),
           },
         });
       }
@@ -697,6 +713,10 @@ export function useChatComposerState({
       setIsUserScrolledUp,
       slashCommands,
       thinkingMode,
+      currentTarget,
+      isRemote,
+      isRemoteReadOnly,
+      targetKey,
     ],
   );
 
@@ -863,8 +883,13 @@ export function useChatComposerState({
       selectedSession?.id || null,
     ];
 
-    const targetSessionId =
+    let targetSessionId =
       candidateSessionIds.find((sessionId) => Boolean(sessionId) && !isTemporarySessionId(sessionId)) || null;
+
+    // 远程 SSH 流在「临时 sessionId」上登记，需允许对 new-session-* 发送 abort
+    if (!targetSessionId && isRemote && provider === 'claude') {
+      targetSessionId = candidateSessionIds.find((sessionId) => Boolean(sessionId)) || null;
+    }
 
     if (!targetSessionId) {
       console.warn('Abort requested but no concrete session ID is available yet.');
@@ -876,7 +901,7 @@ export function useChatComposerState({
       sessionId: targetSessionId,
       provider,
     });
-  }, [canAbortSession, currentSessionId, pendingViewSessionRef, provider, selectedSession?.id, sendMessage]);
+  }, [canAbortSession, currentSessionId, isRemote, pendingViewSessionRef, provider, selectedSession?.id, sendMessage]);
 
   const handleGrantToolPermission = useCallback(
     (suggestion: { entry: string; toolName: string }) => {

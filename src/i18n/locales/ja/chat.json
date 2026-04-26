@@ -111,6 +111,7 @@
     "placeholder": "/ でコマンド、@ でファイル指定、または {{provider}} に何でも聞いてください...",
     "placeholderDefault": "メッセージを入力...",
     "disabled": "入力無効",
+    "remoteReadOnly": "Read-only: viewing history on the remote target. Full chat in a later release (P2).",
     "attachFiles": "ファイルを添付",
     "attachImages": "画像を添付",
     "send": "送信",
@@ -215,7 +216,13 @@
     "resumeSession": "セッションを再開: {{displayName}}...",
     "runCommand": "{{projectName}}で{{command}}を実行",
     "startCli": "{{projectName}}でClaude CLIを起動しています",
-    "defaultCommand": "コマンド"
+    "defaultCommand": "コマンド",
+    "subTabs": {
+      "label": "ターミナル {{index}}",
+      "add": "新しいターミナル",
+      "addTitle": "同じプロジェクトでターミナルを追加",
+      "closeTitle": "このターミナルタブを閉じる"
+    }
   },
   "claudeStatus": {
     "actions": {

@@ -1,4 +1,5 @@
 import { IS_PLATFORM } from "../constants/config";
+import { getTargetKey } from './targetKey.js';
 
 // Utility function for authenticated API calls
 export const authenticatedFetch = (url, options = {}) => {
@@ -13,6 +14,15 @@ export const authenticatedFetch = (url, options = {}) => {
 
   if (!IS_PLATFORM && token) {
     defaultHeaders['Authorization'] = `Bearer ${token}`;
+  }
+
+  try {
+    const tk = getTargetKey();
+    if (tk) {
+      defaultHeaders['x-cloudcli-target'] = tk;
+    }
+  } catch {
+    // ignore: target key optional for unauthenticated or SSR
   }
 
   return fetch(url, {
@@ -282,6 +292,115 @@ export const api = {
       authenticatedFetch(`/api/users/workspaces/${workspaceId}`, {
         method: 'DELETE',
       }),
+  },
+
+  /** SSH remote server registry (P0) */
+  sshServers: {
+    meta: () => authenticatedFetch('/api/ssh-servers/meta'),
+    listGroups: () => authenticatedFetch('/api/ssh-servers/groups'),
+    createGroup: (name) =>
+      authenticatedFetch('/api/ssh-servers/groups', {
+        method: 'POST',
+        body: JSON.stringify({ name }),
+      }),
+    updateGroup: (groupId, body) =>
+      authenticatedFetch(`/api/ssh-servers/groups/${groupId}`, {
+        method: 'PATCH',
+        body: JSON.stringify(body),
+      }),
+    deleteGroup: (groupId) =>
+      authenticatedFetch(`/api/ssh-servers/groups/${groupId}`, {
+        method: 'DELETE',
+      }),
+    list: () => authenticatedFetch('/api/ssh-servers'),
+    create: (body) =>
+      authenticatedFetch('/api/ssh-servers', {
+        method: 'POST',
+        body: JSON.stringify(body),
+      }),
+    update: (serverId, body) =>
+      authenticatedFetch(`/api/ssh-servers/${serverId}`, {
+        method: 'PATCH',
+        body: JSON.stringify(body),
+      }),
+    delete: (serverId) =>
+      authenticatedFetch(`/api/ssh-servers/${serverId}`, {
+        method: 'DELETE',
+      }),
+    setSecrets: (serverId, body) =>
+      authenticatedFetch(`/api/ssh-servers/${serverId}/secrets`, {
+        method: 'PUT',
+        body: JSON.stringify(body),
+      }),
+    test: (serverId) =>
+      authenticatedFetch(`/api/ssh-servers/${serverId}/test`, {
+        method: 'POST',
+      }),
+    claudeProbe: (serverId) =>
+      authenticatedFetch(`/api/ssh-servers/${serverId}/claude-probe`, {
+        method: 'POST',
+      }),
+    claudeInstall: (serverId, body) =>
+      authenticatedFetch(`/api/ssh-servers/${serverId}/claude-install`, {
+        method: 'POST',
+        body: JSON.stringify(body || {}),
+      }),
+    openClaudeProject: (serverId, body) =>
+      authenticatedFetch(`/api/ssh-servers/${serverId}/open-claude-project`, {
+        method: 'POST',
+        body: JSON.stringify(body || {}),
+      }),
+    browseRemoteDir: (serverId, dirPath) => {
+      const u =
+        dirPath != null && String(dirPath).trim() !== ''
+          ? `/api/ssh-servers/${serverId}/browse-dir?path=${encodeURIComponent(String(dirPath))}`
+          : `/api/ssh-servers/${serverId}/browse-dir`;
+      return authenticatedFetch(u);
+    },
+    getClaudeProviderPrefs: (serverId) =>
+      authenticatedFetch(`/api/ssh-servers/${serverId}/claude-provider-prefs`),
+    putClaudeProviderPrefs: (serverId, body) =>
+      authenticatedFetch(`/api/ssh-servers/${serverId}/claude-provider-prefs`, {
+        method: 'PUT',
+        body: JSON.stringify(body || {}),
+      }),
+    applyClaudeProviders: (serverId, body) =>
+      authenticatedFetch(`/api/ssh-servers/${serverId}/claude-providers-apply`, {
+        method: 'POST',
+        body: JSON.stringify(body || {}),
+      }),
+    claudeListModels: (serverId) => authenticatedFetch(`/api/ssh-servers/${serverId}/claude-list-models`),
+    claudeSetDefaultModel: (serverId, body) =>
+      authenticatedFetch(`/api/ssh-servers/${serverId}/claude-set-default-model`, {
+        method: 'POST',
+        body: JSON.stringify(body || {}),
+      }),
+  },
+
+  /** 远程 claudecode：LLM 环境、模板、CLAUDE.md 应用 */
+  remoteClaude: {
+    listTemplates: (kind) => {
+      const q = kind ? `?kind=${encodeURIComponent(kind)}` : '';
+      return authenticatedFetch(`/api/remote-config-templates${q}`);
+    },
+    createTemplate: (body) =>
+      authenticatedFetch('/api/remote-config-templates', { method: 'POST', body: JSON.stringify(body) }),
+    updateTemplate: (id, body) =>
+      authenticatedFetch(`/api/remote-config-templates/${id}`, { method: 'PUT', body: JSON.stringify(body) }),
+    deleteTemplate: (id) =>
+      authenticatedFetch(`/api/remote-config-templates/${id}`, { method: 'DELETE' }),
+    applyClaudeMd: (serverId, body) =>
+      authenticatedFetch(`/api/ssh-servers/${serverId}/claude-md/apply`, {
+        method: 'POST',
+        body: JSON.stringify(body || {}),
+      }),
+    listClaudeProviders: () => authenticatedFetch('/api/claude-providers'),
+    createClaudeProvider: (body) =>
+      authenticatedFetch('/api/claude-providers', { method: 'POST', body: JSON.stringify(body || {}) }),
+    updateClaudeProvider: (entryId, body) =>
+      authenticatedFetch(`/api/claude-providers/${entryId}`, { method: 'PUT', body: JSON.stringify(body || {}) }),
+    deleteClaudeProvider: (entryId) =>
+      authenticatedFetch(`/api/claude-providers/${entryId}`, { method: 'DELETE' }),
   },
 
   /** Resolved `claude` / `claudecode` on server PATH (same as web terminal for Claude). */

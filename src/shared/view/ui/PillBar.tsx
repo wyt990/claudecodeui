@@ -21,17 +21,23 @@ type PillProps = {
   onClick: () => void;
   children: ReactNode;
   className?: string;
+  disabled?: boolean;
+  title?: string;
 };
 
-export function Pill({ isActive, onClick, children, className }: PillProps) {
+export function Pill({ isActive, onClick, children, className, disabled, title }: PillProps) {
   return (
     <button
-      onClick={onClick}
+      type="button"
+      title={title}
+      onClick={disabled ? undefined : onClick}
+      disabled={Boolean(disabled)}
       className={cn(
         'flex touch-manipulation items-center gap-1.5 rounded-md px-3 py-2 text-sm font-medium transition-all duration-150',
         isActive
           ? 'bg-background text-foreground shadow-sm'
           : 'text-muted-foreground active:bg-background/50',
+        disabled && 'pointer-events-none cursor-not-allowed opacity-40',
         className,
       )}
     >

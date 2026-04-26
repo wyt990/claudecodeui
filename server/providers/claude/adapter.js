@@ -202,6 +202,59 @@ export function normalizeMessage(raw, sessionId) {
 }
 
 /**
+ * 将 JSONL 原始行（或 getSessionMessages 分页包）转为统一历史 API 结构。本机与远端 SFTP 复用。
+ * @param {object | Array<unknown>} result - `getSessionMessages` 的返回值或 `{ messages, total, hasMore, offset, limit }`
+ * @param {string} sessionId
+ * @returns {import('../types.js').FetchHistoryResult & { limit?: number | null }}
+ */
+export function normalizeClaudeJsonlToApi(result, sessionId) {
+  const rawMessages = Array.isArray(result) ? result : (result?.messages || []);
+  const total = Array.isArray(result) ? rawMessages.length : (result?.total ?? rawMessages.length);
+  const hasMore = Array.isArray(result) ? false : Boolean(result?.hasMore);
+  const offset = Array.isArray(result) ? 0 : (result?.offset ?? 0);
+  const limit = Array.isArray(result) ? null : result?.limit;
+  if (!rawMessages || rawMessages.length === 0) {
+    return { messages: [], total, hasMore, offset, limit };
+  }
+  const toolResultMap = new Map();
+  for (const raw of rawMessages) {
+    if (raw && raw.message?.role === 'user' && Array.isArray(raw.message?.content)) {
+      for (const part of raw.message.content) {
+        if (part.type === 'tool_result') {
+          toolResultMap.set(part.tool_use_id, {
+            content: part.content,
+            isError: Boolean(part.is_error),
+            timestamp: raw.timestamp,
+            subagentTools: raw.subagentTools,
+            toolUseResult: raw.toolUseResult,
+          });
+        }
+      }
+    }
+  }
+  const normalized = [];
+  for (const raw of rawMessages) {
+    if (!raw) {
+      continue;
+    }
+    const entries = normalizeMessage(raw, sessionId);
+    normalized.push(...entries);
+  }
+  for (const msg of normalized) {
+    if (msg.kind === 'tool_use' && msg.toolId && toolResultMap.has(msg.toolId)) {
+      const tr = toolResultMap.get(msg.toolId);
+      msg.toolResult = {
+        content: typeof tr.content === 'string' ? tr.content : JSON.stringify(tr.content),
+        isError: tr.isError,
+        toolUseResult: tr.toolUseResult,
+      };
+      msg.subagentTools = tr.subagentTools;
+    }
+  }
+  return { messages: normalized, total, hasMore, offset, limit };
+}
+
+/**
  * @type {import('../types.js').ProviderAdapter}
  */
 export const claudeAdapter = {
@@ -224,55 +277,6 @@ export const claudeAdapter = {
       return { messages: [], total: 0, hasMore: false, offset: 0, limit: null };
     }
 
-    // getSessionMessages returns either an array (no limit) or { messages, total, hasMore }
-    const rawMessages = Array.isArray(result) ? result : (result.messages || []);
-    const total = Array.isArray(result) ? rawMessages.length : (result.total || 0);
-    const hasMore = Array.isArray(result) ? false : Boolean(result.hasMore);
-
-    // First pass: collect tool results for attachment to tool_use messages
-    const toolResultMap = new Map();
-    for (const raw of rawMessages) {
-      if (raw.message?.role === 'user' && Array.isArray(raw.message?.content)) {
-        for (const part of raw.message.content) {
-          if (part.type === 'tool_result') {
-            toolResultMap.set(part.tool_use_id, {
-              content: part.content,
-              isError: Boolean(part.is_error),
-              timestamp: raw.timestamp,
-              subagentTools: raw.subagentTools,
-              toolUseResult: raw.toolUseResult,
-            });
-          }
-        }
-      }
-    }
-
-    // Second pass: normalize all messages
-    const normalized = [];
-    for (const raw of rawMessages) {
-      const entries = normalizeMessage(raw, sessionId);
-      normalized.push(...entries);
-    }
-
-    // Attach tool results to their corresponding tool_use messages
-    for (const msg of normalized) {
-      if (msg.kind === 'tool_use' && msg.toolId && toolResultMap.has(msg.toolId)) {
-        const tr = toolResultMap.get(msg.toolId);
-        msg.toolResult = {
-          content: typeof tr.content === 'string' ? tr.content : JSON.stringify(tr.content),
-          isError: tr.isError,
-          toolUseResult: tr.toolUseResult,
-        };
-        msg.subagentTools = tr.subagentTools;
-      }
-    }
-
-    return {
-      messages: normalized,
-      total,
-      hasMore,
-      offset,
-      limit,
-    };
+    return normalizeClaudeJsonlToApi(result, sessionId);
   },
 };

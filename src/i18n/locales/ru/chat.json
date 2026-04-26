@@ -130,6 +130,7 @@
     "placeholder": "Введите / для команд, @ для файлов, или спросите {{provider}} что угодно...",
     "placeholderDefault": "Введите ваше сообщение...",
     "disabled": "Ввод отключен",
+    "remoteReadOnly": "Read-only: viewing history on the remote target. Full chat in a later release (P2).",
     "attachFiles": "Прикрепить файлы",
     "attachImages": "Прикрепить изображения",
     "send": "Отправить",
@@ -242,7 +243,13 @@
     "resumeSession": "Возобновить сеанс: {{displayName}}...",
     "runCommand": "Выполнить {{command}} в {{projectName}}",
     "startCli": "Запуск Claude CLI в {{projectName}}",
-    "defaultCommand": "команда"
+    "defaultCommand": "команда",
+    "subTabs": {
+      "label": "Терминал {{index}}",
+      "add": "Новый терминал",
+      "addTitle": "Добавить вкладку терминала (тот же проект)",
+      "closeTitle": "Закрыть эту вкладку терминала"
+    }
   },
   "claudeStatus": {
     "actions": {

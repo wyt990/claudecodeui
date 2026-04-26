@@ -1,11 +1,11 @@
-import { Folder, FolderPlus, MessageSquare, Plus, RefreshCw, Search, X, PanelLeftClose } from 'lucide-react';
+import { Folder, FolderInput, FolderPlus, MessageSquare, Plus, RefreshCw, Search, Server, X, PanelLeftClose } from 'lucide-react';
 import type { TFunction } from 'i18next';
 import { Button, Input } from '../../../../shared/view/ui';
 import { IS_PLATFORM } from '../../../../constants/config';
 import { cn } from '../../../../lib/utils';
 import GitHubStarBadge from './GitHubStarBadge';
 
-type SearchMode = 'projects' | 'conversations';
+type SearchMode = 'projects' | 'conversations' | 'servers';
 
 type SidebarHeaderProps = {
   isPWA: boolean;
@@ -20,6 +20,9 @@ type SidebarHeaderProps = {
   onRefresh: () => void;
   isRefreshing: boolean;
   onCreateProject: () => void;
+  createProjectDisabled?: boolean;
+  onOpenRemoteProjectByPath?: () => void;
+  isRemoteContext?: boolean;
   onCollapseSidebar: () => void;
   t: TFunction;
 };
@@ -37,6 +40,9 @@ export default function SidebarHeader({
   onRefresh,
   isRefreshing,
   onCreateProject,
+  createProjectDisabled = false,
+  onOpenRemoteProjectByPath,
+  isRemoteContext = false,
   onCollapseSidebar,
   t,
 }: SidebarHeaderProps) {
@@ -86,12 +92,24 @@ export default function SidebarHeader({
                 }`}
               />
             </Button>
+            {isRemoteContext && searchMode === 'projects' && typeof onOpenRemoteProjectByPath === 'function' && (
+              <Button
+                variant="ghost"
+                size="sm"
+                className="h-7 w-7 rounded-lg p-0 text-emerald-600 hover:bg-emerald-500/10 hover:text-emerald-700 dark:text-emerald-400 dark:hover:text-emerald-300"
+                onClick={onOpenRemoteProjectByPath}
+                title={t('tooltips.openRemoteByPath')}
+              >
+                <FolderInput className="h-3.5 w-3.5" />
+              </Button>
+            )}
             <Button
               variant="ghost"
               size="sm"
               className="h-7 w-7 rounded-lg p-0 text-muted-foreground hover:bg-accent/80 hover:text-foreground"
-              onClick={onCreateProject}
-              title={t('tooltips.createProject')}
+              onClick={createProjectDisabled ? undefined : onCreateProject}
+              disabled={createProjectDisabled}
+              title={createProjectDisabled ? t('search.createProjectRemoteDisabled') : t('tooltips.createProject')}
             >
               <Plus className="h-3.5 w-3.5" />
             </Button>
@@ -110,56 +128,71 @@ export default function SidebarHeader({
         <GitHubStarBadge />
 
         {/* Search bar */}
-        {projectsCount > 0 && !isLoading && (
+        {!isLoading && (
           <div className="mt-2.5 space-y-2">
-            {/* Search mode toggle */}
+            {/* Search mode toggle: projects | conversations | SSH servers (P0) */}
             <div className="flex rounded-lg bg-muted/50 p-0.5">
               <button
                 onClick={() => onSearchModeChange('projects')}
                 aria-pressed={searchMode === 'projects'}
                 className={cn(
-                  "flex-1 flex items-center justify-center gap-1.5 rounded-md px-2 py-1.5 text-xs font-medium transition-all",
+                  "flex-1 flex items-center justify-center gap-1 rounded-md px-1.5 py-1.5 text-[11px] font-medium transition-all md:gap-1.5 md:px-2 md:text-xs",
                   searchMode === 'projects'
                     ? "bg-background shadow-sm text-foreground"
                     : "text-muted-foreground hover:text-foreground"
                 )}
               >
-                <Folder className="h-3 w-3" />
-                {t('search.modeProjects')}
+                <Folder className="h-3 w-3 flex-shrink-0" />
+                <span className="truncate">{t('search.modeProjects')}</span>
               </button>
               <button
                 onClick={() => onSearchModeChange('conversations')}
                 aria-pressed={searchMode === 'conversations'}
                 className={cn(
-                  "flex-1 flex items-center justify-center gap-1.5 rounded-md px-2 py-1.5 text-xs font-medium transition-all",
+                  "flex-1 flex items-center justify-center gap-1 rounded-md px-1.5 py-1.5 text-[11px] font-medium transition-all md:gap-1.5 md:px-2 md:text-xs",
                   searchMode === 'conversations'
                     ? "bg-background shadow-sm text-foreground"
                     : "text-muted-foreground hover:text-foreground"
                 )}
               >
-                <MessageSquare className="h-3 w-3" />
-                {t('search.modeConversations')}
+                <MessageSquare className="h-3 w-3 flex-shrink-0" />
+                <span className="truncate">{t('search.modeConversations')}</span>
+              </button>
+              <button
+                onClick={() => onSearchModeChange('servers')}
+                aria-pressed={searchMode === 'servers'}
+                className={cn(
+                  "flex-1 flex items-center justify-center gap-1 rounded-md px-1.5 py-1.5 text-[11px] font-medium transition-all md:gap-1.5 md:px-2 md:text-xs",
+                  searchMode === 'servers'
+                    ? "bg-background shadow-sm text-foreground"
+                    : "text-muted-foreground hover:text-foreground"
+                )}
+              >
+                <Server className="h-3 w-3 flex-shrink-0" />
+                <span className="truncate">{t('search.modeServers')}</span>
               </button>
             </div>
-            <div className="relative">
-              <Search className="pointer-events-none absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground/50" />
-              <Input
-                type="text"
-                placeholder={searchMode === 'conversations' ? t('search.conversationsPlaceholder') : t('projects.searchPlaceholder')}
-                value={searchFilter}
-                onChange={(event) => onSearchFilterChange(event.target.value)}
-                className="nav-search-input h-9 rounded-xl border-0 pl-9 pr-8 text-sm transition-all duration-200 placeholder:text-muted-foreground/40 focus-visible:ring-0 focus-visible:ring-offset-0"
-              />
-              {searchFilter && (
-                <button
-                  onClick={onClearSearchFilter}
-                  aria-label={t('tooltips.clearSearch')}
-                  className="absolute right-2.5 top-1/2 -translate-y-1/2 rounded-md p-0.5 hover:bg-accent"
-                >
-                  <X className="h-3 w-3 text-muted-foreground" />
-                </button>
-              )}
-            </div>
+            {searchMode !== 'servers' && (projectsCount > 0 || searchMode === 'conversations') && (
+              <div className="relative">
+                <Search className="pointer-events-none absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground/50" />
+                <Input
+                  type="text"
+                  placeholder={searchMode === 'conversations' ? t('search.conversationsPlaceholder') : t('projects.searchPlaceholder')}
+                  value={searchFilter}
+                  onChange={(event) => onSearchFilterChange(event.target.value)}
+                  className="nav-search-input h-9 rounded-xl border-0 pl-9 pr-8 text-sm transition-all duration-200 placeholder:text-muted-foreground/40 focus-visible:ring-0 focus-visible:ring-offset-0"
+                />
+                {searchFilter && (
+                  <button
+                    onClick={onClearSearchFilter}
+                    aria-label={t('tooltips.clearSearch')}
+                    className="absolute right-2.5 top-1/2 -translate-y-1/2 rounded-md p-0.5 hover:bg-accent"
+                  >
+                    <X className="h-3 w-3 text-muted-foreground" />
+                  </button>
+                )}
+              </div>
+            )}
           </div>
         )}
       </div>
@@ -193,9 +226,21 @@ export default function SidebarHeader({
             >
               <RefreshCw className={`h-4 w-4 text-muted-foreground ${isRefreshing ? 'animate-spin' : ''}`} />
             </button>
+            {isRemoteContext && searchMode === 'projects' && typeof onOpenRemoteProjectByPath === 'function' && (
+              <button
+                type="button"
+                className="flex h-8 w-8 items-center justify-center rounded-lg border border-emerald-500/30 bg-emerald-500/10 text-emerald-600 transition-all active:scale-95 dark:text-emerald-400"
+                onClick={onOpenRemoteProjectByPath}
+                title={t('tooltips.openRemoteByPath')}
+              >
+                <FolderInput className="h-4 w-4" />
+              </button>
+            )}
             <button
-              className="flex h-8 w-8 items-center justify-center rounded-lg bg-primary/90 text-primary-foreground transition-all active:scale-95"
-              onClick={onCreateProject}
+              className="flex h-8 w-8 items-center justify-center rounded-lg bg-primary/90 text-primary-foreground transition-all active:scale-95 disabled:opacity-40"
+              onClick={createProjectDisabled ? undefined : onCreateProject}
+              disabled={createProjectDisabled}
+              title={createProjectDisabled ? t('search.createProjectRemoteDisabled') : t('tooltips.createProject')}
             >
               <FolderPlus className="h-4 w-4" />
             </button>
@@ -203,55 +248,70 @@ export default function SidebarHeader({
         </div>
 
         {/* Mobile search */}
-        {projectsCount > 0 && !isLoading && (
+        {!isLoading && (
           <div className="mt-2.5 space-y-2">
             <div className="flex rounded-lg bg-muted/50 p-0.5">
               <button
                 onClick={() => onSearchModeChange('projects')}
                 aria-pressed={searchMode === 'projects'}
                 className={cn(
-                  "flex-1 flex items-center justify-center gap-1.5 rounded-md px-2 py-1.5 text-xs font-medium transition-all",
+                  "flex-1 flex items-center justify-center gap-1 rounded-md px-1.5 py-1.5 text-[11px] font-medium transition-all",
                   searchMode === 'projects'
                     ? "bg-background shadow-sm text-foreground"
                     : "text-muted-foreground hover:text-foreground"
                 )}
               >
-                <Folder className="h-3 w-3" />
-                {t('search.modeProjects')}
+                <Folder className="h-3 w-3 flex-shrink-0" />
+                <span className="truncate">{t('search.modeProjects')}</span>
               </button>
               <button
                 onClick={() => onSearchModeChange('conversations')}
                 aria-pressed={searchMode === 'conversations'}
                 className={cn(
-                  "flex-1 flex items-center justify-center gap-1.5 rounded-md px-2 py-1.5 text-xs font-medium transition-all",
+                  "flex-1 flex items-center justify-center gap-1 rounded-md px-1.5 py-1.5 text-[11px] font-medium transition-all",
                   searchMode === 'conversations'
                     ? "bg-background shadow-sm text-foreground"
                     : "text-muted-foreground hover:text-foreground"
                 )}
               >
-                <MessageSquare className="h-3 w-3" />
-                {t('search.modeConversations')}
+                <MessageSquare className="h-3 w-3 flex-shrink-0" />
+                <span className="truncate">{t('search.modeConversations')}</span>
+              </button>
+              <button
+                onClick={() => onSearchModeChange('servers')}
+                aria-pressed={searchMode === 'servers'}
+                className={cn(
+                  "flex-1 flex items-center justify-center gap-1 rounded-md px-1.5 py-1.5 text-[11px] font-medium transition-all",
+                  searchMode === 'servers'
+                    ? "bg-background shadow-sm text-foreground"
+                    : "text-muted-foreground hover:text-foreground"
+                )}
+              >
+                <Server className="h-3 w-3 flex-shrink-0" />
+                <span className="truncate">{t('search.modeServers')}</span>
               </button>
             </div>
-            <div className="relative">
-              <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground/50" />
-              <Input
-                type="text"
-                placeholder={searchMode === 'conversations' ? t('search.conversationsPlaceholder') : t('projects.searchPlaceholder')}
-                value={searchFilter}
-                onChange={(event) => onSearchFilterChange(event.target.value)}
-                className="nav-search-input h-10 rounded-xl border-0 pl-10 pr-9 text-sm transition-all duration-200 placeholder:text-muted-foreground/40 focus-visible:ring-0 focus-visible:ring-offset-0"
-              />
-              {searchFilter && (
-                <button
-                  onClick={onClearSearchFilter}
-                  aria-label={t('tooltips.clearSearch')}
-                  className="absolute right-2.5 top-1/2 -translate-y-1/2 rounded-md p-1 hover:bg-accent"
-                >
-                  <X className="h-3.5 w-3.5 text-muted-foreground" />
-                </button>
-              )}
-            </div>
+            {searchMode !== 'servers' && (projectsCount > 0 || searchMode === 'conversations') && (
+              <div className="relative">
+                <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground/50" />
+                <Input
+                  type="text"
+                  placeholder={searchMode === 'conversations' ? t('search.conversationsPlaceholder') : t('projects.searchPlaceholder')}
+                  value={searchFilter}
+                  onChange={(event) => onSearchFilterChange(event.target.value)}
+                  className="nav-search-input h-10 rounded-xl border-0 pl-10 pr-9 text-sm transition-all duration-200 placeholder:text-muted-foreground/40 focus-visible:ring-0 focus-visible:ring-offset-0"
+                />
+                {searchFilter && (
+                  <button
+                    onClick={onClearSearchFilter}
+                    aria-label={t('tooltips.clearSearch')}
+                    className="absolute right-2.5 top-1/2 -translate-y-1/2 rounded-md p-1 hover:bg-accent"
+                  >
+                    <X className="h-3.5 w-3.5 text-muted-foreground" />
+                  </button>
+                )}
+              </div>
+            )}
           </div>
         )}
       </div>

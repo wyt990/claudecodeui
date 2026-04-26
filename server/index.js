@@ -67,14 +67,29 @@ import userWorkspacesRoutes from './routes/users.js';
 import codexRoutes from './routes/codex.js';
 import geminiRoutes from './routes/gemini.js';
 import pluginsRoutes from './routes/plugins.js';
+import sshServersRoutes from './routes/ssh-servers.js';
+import remoteServerClaudeSettingsRoutes from './routes/remote-server-claude-settings.js';
 import messagesRoutes from './routes/messages.js';
 import { createNormalizedMessage } from './providers/types.js';
 import { startEnabledPluginServers, stopAllPlugins, getPluginPort } from './utils/plugin-process-manager.js';
-import { initializeDatabase, sessionNamesDb, applyCustomSessionNames } from './database/db.js';
+import { initializeDatabase, sessionNamesDb, applyCustomSessionNames, sshServersDb } from './database/db.js';
 import { configureWebPush } from './services/vapid-keys.js';
 import { validateApiKey, authenticateToken, authenticateWebSocket } from './middleware/auth.js';
 import { IS_PLATFORM } from './constants/config.js';
 import { getConnectableHost } from '../shared/networkHosts.js';
+import { parseTargetScope } from './utils/parse-target-scope.js';
+import { getRemoteClaudeProjectList, getRemoteClaudeSessionsForApi } from './remote/remote-claude-data.js';
+import {
+    startRemoteShellPtyOnWebSocket,
+    wireRemoteShellStreamToWebSocket,
+    applyRemotePtySize,
+    writeToRemotePtyStream
+} from './remote/remote-ws-shell.js';
+import {
+    streamRemoteClaudePromptOverSsh,
+    abortRemoteSshClaudeSession,
+    isRemoteSshClaudeSessionActive
+} from './remote/remote-claude-ssh-ws.js';
 
 const VALID_PROVIDERS = ['claude', 'codex', 'cursor', 'gemini'];
 
@@ -403,6 +418,11 @@ app.use('/api/gemini', authenticateToken, geminiRoutes);
 // Plugins API Routes (protected)
 app.use('/api/plugins', authenticateToken, pluginsRoutes);
 
+// SSH remote servers registry (protected, P0)
+app.use('/api/ssh-servers', authenticateToken, sshServersRoutes);
+// Remote LLM / CLAUDE.md templates and apply (protected)
+app.use('/api', authenticateToken, remoteServerClaudeSettingsRoutes);
+
 // Unified session messages route (protected)
 app.use('/api/sessions', authenticateToken, messagesRoutes);
 
@@ -501,6 +521,33 @@ app.post('/api/system/update', authenticateToken, async (req, res) => {
 
 app.get('/api/projects', authenticateToken, async (req, res) => {
     try {
+        const scope = parseTargetScope(req);
+        if (scope.kind === 'invalid') {
+            return res.status(400).json({ error: scope.error, code: 'INVALID_TARGET' });
+        }
+        if (scope.kind === 'remote') {
+            const server = sshServersDb.getServer(req.user.id, scope.serverId);
+            if (!server) {
+                return res.status(404).json({ error: 'SSH server not found', code: 'SSH_SERVER_NOT_FOUND' });
+            }
+            try {
+                const projects = await getRemoteClaudeProjectList(req.user.id, scope.serverId);
+                console.log(
+                    `[api/projects] remote ok userId=${req.user.id} serverId=${scope.serverId} count=${Array.isArray(projects) ? projects.length : 0}`,
+                );
+                res.json(projects);
+            } catch (e) {
+                if (e?.code === 'SSH_NO_SECRETS' || e?.code === 'SSH_DECRYPT_FAILED') {
+                    return res.status(400).json({ error: e.message, code: e.code || 'SSH_KEY_ERROR' });
+                }
+                console.error(
+                    `[api/projects] remote fail userId=${req.user.id} serverId=${scope.serverId}:`,
+                    e && e.stack ? e.stack : e,
+                );
+                return res.status(500).json({ error: e.message || 'Failed to list remote projects' });
+            }
+            return;
+        }
         const projects = await getProjects(broadcastProgress);
         res.json(projects);
     } catch (error) {
@@ -511,7 +558,32 @@ app.get('/api/projects', authenticateToken, async (req, res) => {
 app.get('/api/projects/:projectName/sessions', authenticateToken, async (req, res) => {
     try {
         const { limit = 5, offset = 0 } = req.query;
-        const result = await getSessions(req.params.projectName, parseInt(limit), parseInt(offset));
+        const scope = parseTargetScope(req);
+        if (scope.kind === 'invalid') {
+            return res.status(400).json({ error: scope.error, code: 'INVALID_TARGET' });
+        }
+        if (scope.kind === 'remote') {
+            if (!sshServersDb.getServer(req.user.id, scope.serverId)) {
+                return res.status(404).json({ error: 'SSH server not found' });
+            }
+            try {
+                const result = await getRemoteClaudeSessionsForApi(
+                    req.user.id,
+                    scope.serverId,
+                    req.params.projectName,
+                    parseInt(limit, 10) || 5,
+                    parseInt(offset, 10) || 0,
+                );
+                return res.json(result);
+            } catch (e) {
+                if (e?.code === 'SSH_NO_SECRETS' || e?.code === 'SSH_DECRYPT_FAILED') {
+                    return res.status(400).json({ error: e.message, code: e.code });
+                }
+                console.error('[api/projects/.../sessions] remote', e);
+                return res.status(500).json({ error: e.message || 'Failed to list remote sessions' });
+            }
+        }
+        const result = await getSessions(req.params.projectName, parseInt(limit, 10), parseInt(offset, 10));
         applyCustomSessionNames(req.user.id, result.sessions, 'claude');
         res.json(result);
     } catch (error) {
@@ -1540,7 +1612,7 @@ wss.on('connection', (ws, request) => {
     const pathname = urlObj.pathname;
 
     if (pathname === '/shell') {
-        handleShellConnection(ws);
+        handleShellConnection(ws, request);
     } else if (pathname === '/ws') {
         handleChatConnection(ws, request);
     } else if (pathname.startsWith('/plugin-ws/')) {
@@ -1599,7 +1671,16 @@ function handleChatConnection(ws, request) {
         try {
             const data = JSON.parse(message);
 
-            if (data.type === 'claude-command') {
+            if (data.type === 'claude-command' && data.options?.useRemoteSsh) {
+                const userId = request?.user?.userId ?? request?.user?.id;
+                if (!userId) {
+                    writer.send(
+                        createNormalizedMessage({ kind: 'error', content: 'Not authenticated for remote', provider: 'claude' }),
+                    );
+                } else {
+                    await streamRemoteClaudePromptOverSsh({ userId, command: data.command, options: data.options, writer });
+                }
+            } else if (data.type === 'claude-command') {
                 console.log('[DEBUG] User message:', data.command || '[Continue/Resume]');
                 console.log('📁 Project:', data.options?.projectPath || 'Unknown');
                 console.log('🔄 Session:', data.options?.sessionId ? 'Resume' : 'New');
@@ -1643,6 +1724,8 @@ function handleChatConnection(ws, request) {
                     success = abortCodexSession(data.sessionId);
                 } else if (provider === 'gemini') {
                     success = abortGeminiSession(data.sessionId);
+                } else if (provider === 'claude' && (data.useRemoteSsh || isRemoteSshClaudeSessionActive(data.sessionId))) {
+                    success = abortRemoteSshClaudeSession(data.sessionId);
                 } else {
                     // Use Claude Agents SDK
                     success = await abortClaudeSDKSession(data.sessionId);
@@ -1679,8 +1762,8 @@ function handleChatConnection(ws, request) {
                     isActive = isGeminiSessionActive(sessionId);
                 } else {
                     // Use Claude Agents SDK
-                    isActive = isClaudeSDKSessionActive(sessionId);
-                    if (isActive) {
+                    isActive = isClaudeSDKSessionActive(sessionId) || isRemoteSshClaudeSessionActive(sessionId);
+                    if (isClaudeSDKSessionActive(sessionId)) {
                         // Reconnect the session's writer to the new WebSocket so
                         // subsequent SDK output flows to the refreshed client.
                         reconnectSessionWriter(sessionId, ws);
@@ -1689,6 +1772,7 @@ function handleChatConnection(ws, request) {
 
                 writer.send({
                     type: 'session-status',
+                    targetKey: 'local',
                     sessionId,
                     provider,
                     isProcessing: isActive
@@ -1700,6 +1784,7 @@ function handleChatConnection(ws, request) {
                     const pending = getPendingApprovalsForSession(sessionId);
                     writer.send({
                         type: 'pending-permissions-response',
+                        targetKey: 'local',
                         sessionId,
                         data: pending
                     });
@@ -1714,6 +1799,7 @@ function handleChatConnection(ws, request) {
                 };
                 writer.send({
                     type: 'active-sessions',
+                    targetKey: 'local',
                     sessions: activeSessions
                 });
             }
@@ -1721,6 +1807,7 @@ function handleChatConnection(ws, request) {
             console.error('[ERROR] Chat WebSocket error:', error.message);
             writer.send({
                 type: 'error',
+                targetKey: 'local',
                 error: error.message
             });
         }
@@ -1751,12 +1838,23 @@ function parseShellClientJson(message) {
 }
 
 // Handle shell WebSocket connections
-function handleShellConnection(ws) {
+function handleShellConnection(ws, request) {
     console.log('🐚 Shell client connected');
     let shellProcess = null;
     let ptySessionKey = null;
     let urlDetectionBuffer = '';
     const announcedAuthUrls = new Set();
+    let remotePty = null; // { stream, targetKey, dispose } — 远程 P3 池化 SSH，无挂 client
+    const disposeRemotePty = () => {
+        if (remotePty) {
+            try {
+                remotePty.dispose();
+            } catch {
+                /* */
+            }
+            remotePty = null;
+        }
+    };
 
     ws.on('message', async (message) => {
         try {
@@ -1764,6 +1862,39 @@ function handleShellConnection(ws) {
             // High-frequency messages (keystrokes, resizes) are omitted to avoid log spam.
             if (data.type !== 'input' && data.type !== 'resize') {
                 console.log('📨 Shell message received:', data.type);
+            }
+
+            if (data.type === 'init' && data.targetKey && String(data.targetKey).startsWith('remote:')) {
+                const userId = request?.user?.userId ?? request?.user?.id;
+                if (!userId) {
+                    if (ws.readyState === WebSocket.OPEN) {
+                        ws.send(JSON.stringify({ type: 'output', data: '\r\n\x1b[31m[Shell] Not authenticated\x1b[0m\r\n' }));
+                    }
+                    return;
+                }
+                disposeRemotePty();
+                shellProcess = null;
+                ptySessionKey = null;
+                urlDetectionBuffer = '';
+                announcedAuthUrls.clear();
+                try {
+                    const { stream, targetKey, releaseSession } = await startRemoteShellPtyOnWebSocket(ws, userId, data);
+                    if (ws.readyState === WebSocket.OPEN) {
+                        ws.send(JSON.stringify({
+                            type: 'output',
+                            targetKey,
+                            data: '\x1b[36m[Remote shell over SSH — type below; disconnect tab to close.]\x1b[0m\r\n',
+                        }));
+                    }
+                    const dispose = wireRemoteShellStreamToWebSocket(ws, stream, targetKey, releaseSession);
+                    remotePty = { stream, targetKey, dispose };
+                } catch (e) {
+                    const msg = e && e.message ? e.message : String(e);
+                    if (ws.readyState === WebSocket.OPEN) {
+                        ws.send(JSON.stringify({ type: 'output', data: `\r\n\x1b[31m[Remote shell] ${msg}\x1b[0m\r\n` }));
+                    }
+                }
+                return;
             }
 
             if (data.type === 'init') {
@@ -2078,7 +2209,13 @@ function handleShellConnection(ws) {
             } else if (data.type === 'input') {
                 // Send input to shell process (JSON must carry UTF-8 text as a JS string)
                 const inputChunk = typeof data.data === 'string' ? data.data : '';
-                if (shellProcess && shellProcess.write) {
+                if (remotePty && remotePty.stream) {
+                    try {
+                        writeToRemotePtyStream(remotePty.stream, inputChunk);
+                    } catch (error) {
+                        console.error('Error writing to remote shell:', error);
+                    }
+                } else if (shellProcess && shellProcess.write) {
                     try {
                         shellProcess.write(inputChunk);
                     } catch (error) {
@@ -2089,7 +2226,11 @@ function handleShellConnection(ws) {
                 }
             } else if (data.type === 'resize') {
                 // Handle terminal resize
-                if (shellProcess && shellProcess.resize) {
+                if (remotePty && remotePty.stream) {
+                    if (data.cols > 0 && data.rows > 0) {
+                        applyRemotePtySize(remotePty.stream, data.rows, data.cols);
+                    }
+                } else if (shellProcess && shellProcess.resize) {
                     console.log('Terminal resize requested:', data.cols, 'x', data.rows);
                     shellProcess.resize(data.cols, data.rows);
                 }
@@ -2107,6 +2248,7 @@ function handleShellConnection(ws) {
 
     ws.on('close', () => {
         console.log('🔌 Shell client disconnected');
+        disposeRemotePty();
 
         if (ptySessionKey) {
             const session = ptySessionsMap.get(ptySessionKey);
@@ -2538,7 +2680,20 @@ async function startServer() {
         }
 
         console.log(`${c.info('[INFO]')} To run in development mode with hot-module replacement, go to http://${DISPLAY_HOST}:${VITE_PORT}`);
-   
+
+        server.on('error', (err) => {
+            if (err && err.code === 'EADDRINUSE') {
+                console.error('');
+                console.error(`${c.warn('[ERROR]')} Port ${SERVER_PORT} is already in use on ${HOST}. Another CloudCLI / Node process is likely still running.`);
+                console.error(`${c.dim('       Option A: Stop the old server (e.g. close the other terminal or: fuser -k ' + SERVER_PORT + '/tcp on Linux)')}`);
+                console.error(`${c.dim('       Option B: Use a free port: SERVER_PORT=3002 npm run server')}`);
+                console.error('');
+            } else {
+                console.error('[ERROR] HTTP server error:', err);
+            }
+            process.exit(1);
+        });
+
         server.listen(SERVER_PORT, HOST, async () => {
             const appInstallPath = path.join(__dirname, '..');
 

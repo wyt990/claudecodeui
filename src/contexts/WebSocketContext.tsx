@@ -1,6 +1,7 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { useAuth } from '../components/auth/context/AuthContext';
 import { IS_PLATFORM } from '../constants/config';
+import { getTargetKey } from '../utils/targetKey.js';
 
 type WebSocketContextType = {
   ws: WebSocket | null;
@@ -64,7 +65,11 @@ const useWebSocketProviderState = (): WebSocketContextType => {
         wsRef.current = websocket;
         if (hasConnectedRef.current) {
           // This is a reconnect — signal so components can catch up on missed messages
-          setLatestMessage({ type: 'websocket-reconnected', timestamp: Date.now() });
+          setLatestMessage({
+            type: 'websocket-reconnected',
+            timestamp: Date.now(),
+            targetKey: getTargetKey(),
+          });
         }
         hasConnectedRef.current = true;
       };

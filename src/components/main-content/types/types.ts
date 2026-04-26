@@ -61,12 +61,15 @@ export type MainContentHeaderProps = {
   selectedProject: Project;
   selectedSession: ProjectSession | null;
   shouldShowTasksTab: boolean;
+  isRemoteTarget: boolean;
   isMobile: boolean;
   onMenuClick: () => void;
 };
 
 export type MainContentStateViewProps = {
   mode: 'loading' | 'empty';
+  /** 无项目且 currentTarget 为 remote 时展示对应文案 */
+  emptyContext?: 'default' | 'remote';
   isMobile: boolean;
   onMenuClick: () => void;
 };

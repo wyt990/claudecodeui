@@ -13,7 +13,10 @@ import EditorSidebar from '../../code-editor/view/EditorSidebar';
 import { cn } from '../../../lib/utils';
 import type { AppTab, Project } from '../../../types/app';
 import { TaskMasterPanel } from '../../task-master';
+import { useEnvironment } from '../../../contexts/EnvironmentContext';
+import { useMainShellSubtabs } from '../../../hooks/useMainShellSubtabs';
 import MainContentHeader from './subcomponents/MainContentHeader';
+import ShellSubTabBar from './subcomponents/ShellSubTabBar';
 import MainContentStateView from './subcomponents/MainContentStateView';
 import ErrorBoundary from './ErrorBoundary';
 
@@ -50,6 +53,10 @@ function MainContent({
   onShowSettings,
   externalMessageUpdate,
 }: MainContentProps) {
+  const { isRemote, targetKey } = useEnvironment();
+  const isRemoteWithProject = Boolean(isRemote && selectedProject);
+  const { tabIds: shellTabIds, activeId: activeShellTabId, setActive: setActiveShellTab, addTab: addShellTab, removeTab: removeShellTab } =
+    useMainShellSubtabs(targetKey);
   const { preferences } = useUiPreferences();
   const { autoExpandTools, showRawParameters, showThinking, autoScrollToBottom, sendByCtrlEnter } = preferences;
 
@@ -139,12 +146,25 @@ function MainContent({
     }
   }, [shouldShowTasksTab, activeTab, setActiveTab]);
 
+  useEffect(() => {
+    if (isRemoteWithProject && activeTab !== 'chat' && activeTab !== 'preview' && activeTab !== 'shell') {
+      setActiveTab('chat');
+    }
+  }, [isRemoteWithProject, activeTab, setActiveTab]);
+
   if (isLoading) {
     return <MainContentStateView mode="loading" isMobile={isMobile} onMenuClick={onMenuClick} />;
   }
 
   if (!selectedProject) {
-    return <MainContentStateView mode="empty" isMobile={isMobile} onMenuClick={onMenuClick} />;
+    return (
+      <MainContentStateView
+        mode="empty"
+        emptyContext={isRemote ? 'remote' : 'default'}
+        isMobile={isMobile}
+        onMenuClick={onMenuClick}
+      />
+    );
   }
 
   const hideMainFilePane = filesLayoutEditorFocus && activeTab === 'files';
@@ -157,6 +177,7 @@ function MainContent({
         selectedProject={selectedProject}
         selectedSession={selectedSession}
         shouldShowTasksTab={shouldShowTasksTab}
+        isRemoteTarget={isRemote}
         isMobile={isMobile}
         onMenuClick={onMenuClick}
       />
@@ -204,13 +225,26 @@ function MainContent({
           )}
 
           {activeTab === 'shell' && (
-            <div className="h-full w-full overflow-hidden">
-              <StandaloneShell
-                project={selectedProject}
-                session={selectedSession}
-                showHeader={false}
-                isActive={activeTab === 'shell'}
+            <div className="flex h-full min-h-0 w-full flex-col overflow-hidden">
+              <ShellSubTabBar
+                tabIds={shellTabIds}
+                activeId={activeShellTabId}
+                onSelect={setActiveShellTab}
+                onAdd={addShellTab}
+                onClose={removeShellTab}
               />
+              <div className="min-h-0 min-w-0 flex-1">
+                {shellTabIds.map((sid) => (
+                  <div key={sid} className={sid === activeShellTabId ? 'h-full' : 'hidden'}>
+                    <StandaloneShell
+                      project={selectedProject}
+                      session={selectedSession}
+                      showHeader={false}
+                      isActive={activeTab === 'shell' && sid === activeShellTabId}
+                    />
+                  </div>
+                ))}
+              </div>
             </div>
           )}
 

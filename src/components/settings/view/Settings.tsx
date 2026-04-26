@@ -1,5 +1,7 @@
 import { X } from 'lucide-react';
+import { useEffect, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
+import { useEnvironment } from '../../../contexts/EnvironmentContext';
 import ProviderLoginModal from '../../provider-auth/view/ProviderLoginModal';
 import { Button } from '../../../shared/view/ui';
 import ClaudeMcpFormModal from '../view/modals/ClaudeMcpFormModal';
@@ -17,12 +19,32 @@ import UserManagementTab from '../view/tabs/UserManagementTab';
 import { useSettingsController } from '../hooks/useSettingsController';
 import { useWebPush } from '../../../hooks/useWebPush';
 import { useAuth } from '../../auth';
-import type { SettingsProps } from '../types/types';
+import type { SettingsMainTab, SettingsProps } from '../types/types';
+
+const REMOTE_OFF_LIMITS: readonly SettingsMainTab[] = [
+  'agents',
+  'git',
+  'tasks',
+  'plugins',
+  'notifications',
+];
 
 function Settings({ isOpen, onClose, projects = [], initialTab = 'agents' }: SettingsProps) {
   const { t } = useTranslation('settings');
   const { user } = useAuth();
   const isAdmin = user?.role === 'admin';
+  const { isRemote } = useEnvironment();
+
+  const initialTabForController = useMemo(() => {
+    if (!isRemote) {
+      return initialTab;
+    }
+    const t0 = (initialTab || 'agents') as string;
+    if (REMOTE_OFF_LIMITS.includes(t0 as SettingsMainTab)) {
+      return 'appearance';
+    }
+    return initialTab;
+  }, [initialTab, isRemote]);
 
   const {
     activeTab,
@@ -75,10 +97,19 @@ function Settings({ isOpen, onClose, projects = [], initialTab = 'agents' }: Set
     handleLoginComplete,
   } = useSettingsController({
     isOpen,
-    initialTab,
+    initialTab: initialTabForController,
     projects,
     onClose,
   });
+
+  useEffect(() => {
+    if (!isOpen || !isRemote) {
+      return;
+    }
+    if (REMOTE_OFF_LIMITS.includes(activeTab)) {
+      setActiveTab('appearance');
+    }
+  }, [isOpen, isRemote, activeTab, setActiveTab]);
 
   const {
     permission: pushPermission,
@@ -141,10 +172,23 @@ function Settings({ isOpen, onClose, projects = [], initialTab = 'agents' }: Set
 
         {/* Body: sidebar + content */}
         <div className="flex min-h-0 flex-1 flex-col md:flex-row">
-          <SettingsSidebar activeTab={activeTab} onChange={setActiveTab} isAdmin={isAdmin} />
+          <SettingsSidebar
+            activeTab={activeTab}
+            onChange={setActiveTab}
+            isAdmin={isAdmin}
+            isRemoteTarget={isRemote}
+          />
 
           {/* Content */}
           <main className="flex-1 overflow-y-auto">
+            {isRemote && (
+              <div
+                className="border-b border-amber-500/35 bg-amber-500/10 px-4 py-2.5 text-xs text-amber-950 dark:text-amber-100 md:px-6"
+                role="status"
+              >
+                {t('remoteTarget.banner')}
+              </div>
+            )}
             <div key={activeTab} className="settings-content-enter space-y-6 p-4 pb-safe-area-inset-bottom md:space-y-8 md:p-6">
               {activeTab === 'appearance' && (
                 <AppearanceSettingsTab

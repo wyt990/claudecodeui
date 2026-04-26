@@ -130,6 +130,7 @@
     "placeholder": "/ für Befehle, @ für Dateien eingeben oder {{provider}} etwas fragen...",
     "placeholderDefault": "Nachricht eingeben...",
     "disabled": "Eingabe deaktiviert",
+    "remoteReadOnly": "Read-only: viewing history on the remote target. Full chat in a later release (P2).",
     "attachFiles": "Dateien anhängen",
     "attachImages": "Bilder anhängen",
     "send": "Senden",
@@ -242,7 +243,13 @@
     "resumeSession": "Sitzung fortsetzen: {{displayName}}...",
     "runCommand": "{{command}} in {{projectName}} ausführen",
     "startCli": "Claude CLI wird in {{projectName}} gestartet",
-    "defaultCommand": "Befehl"
+    "defaultCommand": "Befehl",
+    "subTabs": {
+      "label": "Terminal {{index}}",
+      "add": "Neues Terminal",
+      "addTitle": "Weiteren Terminal-Tab (gleiches Projekt)",
+      "closeTitle": "Diesen Terminal-Tab schließen"
+    }
   },
   "claudeStatus": {
     "actions": {

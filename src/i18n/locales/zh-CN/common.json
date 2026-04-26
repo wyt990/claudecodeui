@@ -88,12 +88,19 @@
     "settingUpWorkspace": "正在设置您的工作空间...",
     "chooseProject": "选择您的项目",
     "selectProjectDescription": "从侧边栏选择一个项目以开始使用 Claude 进行编程。每个项目包含您的聊天会话和文件历史。",
+    "emptyRemoteTitle": "暂无可选远程项目",
+    "emptyRemoteDescription": "远端项目与会话的完整接入在后续版本提供。请在「服务器」中切换为「本机」以使用本地项目列表；在远程模式下仍可使用部分设置项（如外观、API 令牌）。",
     "tip": "提示",
     "createProjectMobile": "点击上方的菜单按钮以访问项目",
     "createProjectDesktop": "点击侧边栏中的文件夹图标以创建新项目",
     "newSession": "新会话",
     "untitledSession": "未命名会话",
     "projectFiles": "项目文件"
+  },
+  "remoteTarget": {
+    "tabDisabled": "远程工作区下暂不可用（需对 SSH 目标接好对应能力后再开放，见方案 §7.1）。",
+    "mainWorkspaceTitle": "远程工作区：{{name}}",
+    "mainWorkspaceBody": "此处的项目列表仍由运行 CloudCLI 的宿主机发现。待远端项目与会话、文件/终端等接入后，主区将改为你所选的 SSH 环境。"
   },
   "fileTree": {
     "loading": "正在加载文件...",

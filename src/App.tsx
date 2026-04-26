@@ -1,5 +1,6 @@
 import { BrowserRouter as Router, Route, Routes } from 'react-router-dom';
 import { I18nextProvider } from 'react-i18next';
+import { EnvironmentProvider } from './contexts/EnvironmentContext';
 import { ThemeProvider } from './contexts/ThemeContext';
 import { AuthProvider, ProtectedRoute } from './components/auth';
 import { TaskMasterProvider } from './contexts/TaskMasterContext';
@@ -15,6 +16,7 @@ export default function App() {
       <ThemeProvider>
         <AuthProvider>
           <WebSocketProvider>
+            <EnvironmentProvider>
             <PluginsProvider>
               <TasksSettingsProvider>
                 <TaskMasterProvider>
@@ -29,6 +31,7 @@ export default function App() {
                 </TaskMasterProvider>
               </TasksSettingsProvider>
             </PluginsProvider>
+            </EnvironmentProvider>
           </WebSocketProvider>
         </AuthProvider>
       </ThemeProvider>

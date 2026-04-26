@@ -1,4 +1,17 @@
-import { Check, ChevronDown, ChevronRight, Edit3, Folder, FolderOpen, Star, Trash2, X } from 'lucide-react';
+import {
+  Check,
+  ChevronDown,
+  ChevronRight,
+  Edit3,
+  FileText,
+  Folder,
+  FolderOpen,
+  Loader2,
+  PlayCircle,
+  Star,
+  Trash2,
+  X,
+} from 'lucide-react';
 import type { TFunction } from 'i18next';
 import { Button } from '../../../../shared/view/ui';
 import { cn } from '../../../../lib/utils';
@@ -47,6 +60,9 @@ type SidebarProjectItemProps = {
   onCancelEditingSession: () => void;
   onSaveEditingSession: (projectName: string, sessionId: string, summary: string, provider: SessionProvider) => void;
   t: TFunction;
+  onOpenRemoteClaudeProject?: (project: Project) => void | Promise<void>;
+  remoteClaudeOpenBusyName?: string | null;
+  onOpenClaudeMdRemote?: (project: Project) => void;
 };
 
 const getSessionCountDisplay = (sessions: SessionWithProvider[], hasMoreSessions: boolean): string => {
@@ -92,8 +108,16 @@ export default function SidebarProjectItem({
   onCancelEditingSession,
   onSaveEditingSession,
   t,
+  onOpenRemoteClaudeProject,
+  remoteClaudeOpenBusyName,
+  onOpenClaudeMdRemote,
 }: SidebarProjectItemProps) {
   const isSelected = selectedProject?.name === project.name;
+  const isRemoteClaude = project.__cloudcliRemote === true;
+  const canOpenRemote = isRemoteClaude && typeof onOpenRemoteClaudeProject === 'function';
+  const canClaudeMd =
+    isRemoteClaude && typeof onOpenClaudeMdRemote === 'function' && (project.fullPath || project.path || '').toString().startsWith('/');
+  const remoteOpenBusy = remoteClaudeOpenBusyName === project.name;
   const isEditing = editingProject === project.name;
   const hasMoreSessions = project.sessionMeta?.hasMore === true;
   const sessionCountDisplay = getSessionCountDisplay(sessions, hasMoreSessions);
@@ -235,6 +259,40 @@ export default function SidebarProjectItem({
                       />
                     </button>
 
+                    {canOpenRemote && !isEditing && (
+                      <button
+                        type="button"
+                        className="flex h-8 min-h-8 w-8 min-w-8 shrink-0 items-center justify-center rounded-lg border border-emerald-200 bg-emerald-500/10 active:scale-90 dark:border-emerald-800 dark:bg-emerald-900/30"
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          void onOpenRemoteClaudeProject?.(project);
+                        }}
+                        disabled={remoteOpenBusy}
+                        title={t('tooltips.openRemoteClaudeProject')}
+                        aria-label={t('tooltips.openRemoteClaudeProject')}
+                      >
+                        {remoteOpenBusy ? (
+                          <Loader2 className="h-4 w-4 animate-spin text-emerald-600 dark:text-emerald-400" />
+                        ) : (
+                          <PlayCircle className="h-4 w-4 text-emerald-600 dark:text-emerald-400" />
+                        )}
+                      </button>
+                    )}
+                    {canClaudeMd && !isEditing && (
+                      <button
+                        type="button"
+                        className="flex h-8 min-h-8 w-8 min-w-8 shrink-0 items-center justify-center rounded-lg border border-sky-200 bg-sky-500/10 active:scale-90 dark:border-sky-800 dark:bg-sky-900/30"
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          onOpenClaudeMdRemote?.(project);
+                        }}
+                        title={t('tooltips.openClaudeMdRemote')}
+                        aria-label={t('tooltips.openClaudeMdRemote')}
+                      >
+                        <FileText className="h-4 w-4 text-sky-600 dark:text-sky-400" />
+                      </button>
+                    )}
+
                     <button
                       className="flex h-8 w-8 items-center justify-center rounded-lg border border-red-200 bg-red-500/10 active:scale-90 dark:border-red-800 dark:bg-red-900/30"
                       onClick={(event) => {
@@ -372,6 +430,57 @@ export default function SidebarProjectItem({
                     )}
                   />
                 </div>
+                {canOpenRemote && !isEditing && (
+                  <div
+                    className={cn(
+                      'flex h-6 w-6 min-w-6 min-h-6 touch:opacity-100 cursor-pointer items-center justify-center rounded opacity-0 transition-all duration-200 hover:bg-emerald-50 group-hover:opacity-100 dark:hover:bg-emerald-900/20',
+                      remoteOpenBusy && 'pointer-events-none opacity-100',
+                    )}
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      void onOpenRemoteClaudeProject?.(project);
+                    }}
+                    title={t('tooltips.openRemoteClaudeProject')}
+                    role="button"
+                    tabIndex={0}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' || e.key === ' ') {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        void onOpenRemoteClaudeProject?.(project);
+                      }
+                    }}
+                    aria-label={t('tooltips.openRemoteClaudeProject')}
+                  >
+                    {remoteOpenBusy ? (
+                      <Loader2 className="h-3 w-3 shrink-0 animate-spin text-emerald-600 dark:text-emerald-400" />
+                    ) : (
+                      <PlayCircle className="h-3 w-3 shrink-0 text-emerald-600 dark:text-emerald-400" />
+                    )}
+                  </div>
+                )}
+                {canClaudeMd && !isEditing && (
+                  <div
+                    className="flex h-6 w-6 min-w-6 min-h-6 touch:opacity-100 cursor-pointer items-center justify-center rounded opacity-0 transition-all duration-200 hover:bg-sky-50 group-hover:opacity-100 dark:hover:bg-sky-900/20"
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      onOpenClaudeMdRemote?.(project);
+                    }}
+                    title={t('tooltips.openClaudeMdRemote')}
+                    role="button"
+                    tabIndex={0}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' || e.key === ' ') {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        onOpenClaudeMdRemote?.(project);
+                      }
+                    }}
+                    aria-label={t('tooltips.openClaudeMdRemote')}
+                  >
+                    <FileText className="h-3 w-3 shrink-0 text-sky-600 dark:text-sky-400" />
+                  </div>
+                )}
                 <div
                   className="touch:opacity-100 flex h-6 w-6 cursor-pointer items-center justify-center rounded opacity-0 transition-all duration-200 hover:bg-accent group-hover:opacity-100"
                   onClick={(event) => {

@@ -3,9 +3,10 @@ import type { MutableRefObject } from 'react';
 import { authenticatedFetch } from '../../../utils/api';
 import type { ChatMessage, Provider } from '../types/types';
 import type { Project, ProjectSession, SessionProvider } from '../../../types/app';
+import type { SessionStore, NormalizedMessage } from '../../../stores/useSessionStore';
+import { getTargetKey } from '../../../utils/targetKey.js';
 import { createCachedDiffCalculator, type DiffCalculator } from '../utils/messageTransforms';
 import { normalizedToChatMessages } from './useChatMessages';
-import type { SessionStore, NormalizedMessage } from '../../../stores/useSessionStore';
 
 const MESSAGES_PER_PAGE = 20;
 const INITIAL_VISIBLE_MESSAGES = 100;
@@ -133,6 +134,12 @@ export function useChatSessionState({
   const lastLoadedSessionKeyRef = useRef<string | null>(null);
 
   const createDiff = useMemo<DiffCalculator>(() => createCachedDiffCalculator(), []);
+
+  // 切换本机/远程时强制重新拉取，避免与 §4.3 清理后的空 store 与旧 key 短路
+  const targetKey = getTargetKey();
+  useEffect(() => {
+    lastLoadedSessionKeyRef.current = null;
+  }, [targetKey]);
 
   /* ---------------------------------------------------------------- */
   /*  Derive chatMessages from the store                              */
@@ -325,7 +332,7 @@ export function useChatSessionState({
     }
 
     const provider = (selectedSession.__provider || localStorage.getItem('selected-provider') as Provider) || 'claude';
-    const sessionKey = `${selectedSession.id}:${selectedProject.name}:${provider}`;
+    const sessionKey = `${targetKey}:${selectedSession.id}:${selectedProject.name}:${provider}`;
 
     // Skip if already loaded and fresh
     if (lastLoadedSessionKeyRef.current === sessionKey && sessionStore.has(selectedSession.id) && !sessionStore.isStale(selectedSession.id)) {
@@ -390,6 +397,7 @@ export function useChatSessionState({
       setIsLoadingSessionMessages(false);
     });
   }, [
+    targetKey,
     pendingViewSessionRef,
     resetStreamingState,
     selectedProject,

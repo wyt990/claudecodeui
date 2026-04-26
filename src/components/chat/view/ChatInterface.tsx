@@ -9,6 +9,7 @@ import { useChatSessionState } from '../hooks/useChatSessionState';
 import { useChatRealtimeHandlers } from '../hooks/useChatRealtimeHandlers';
 import { useChatComposerState } from '../hooks/useChatComposerState';
 import { useSessionStore } from '../../../stores/useSessionStore';
+import { useEnvironment } from '../../../contexts/EnvironmentContext';
 import ChatMessagesPane from './subcomponents/ChatMessagesPane';
 import ChatComposer from './subcomponents/ChatComposer';
 
@@ -45,7 +46,23 @@ function ChatInterface({
   const { tasksEnabled, isTaskMasterInstalled } = useTasksSettings();
   const { t } = useTranslation('chat');
 
+  const { targetKey, isRemote } = useEnvironment();
   const sessionStore = useSessionStore();
+  const { clearEntireStore } = sessionStore;
+
+  const previousTargetKeyRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (previousTargetKeyRef.current === null) {
+      previousTargetKeyRef.current = targetKey;
+      return;
+    }
+    if (previousTargetKeyRef.current === targetKey) {
+      return;
+    }
+    previousTargetKeyRef.current = targetKey;
+    clearEntireStore();
+  }, [targetKey, clearEntireStore]);
+
   const streamBufferRef = useRef('');
   const streamTimerRef = useRef<number | null>(null);
   const accumulatedStreamRef = useRef('');
@@ -201,6 +218,7 @@ function ChatInterface({
     setClaudeStatus,
     setIsUserScrolledUp,
     setPendingPermissionRequests,
+    isRemoteReadOnly: isRemote && provider !== 'claude',
   });
 
   // On WebSocket reconnect, re-fetch the current session's messages from the server
@@ -411,6 +429,7 @@ function ChatInterface({
           })}
           isTextareaExpanded={isTextareaExpanded}
           sendByCtrlEnter={sendByCtrlEnter}
+          readOnly={isRemote && provider !== 'claude'}
         />
       </div>
 

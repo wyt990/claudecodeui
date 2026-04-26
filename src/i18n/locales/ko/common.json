@@ -88,12 +88,19 @@
     "settingUpWorkspace": "워크스페이스 설정 중...",
     "chooseProject": "프로젝트 선택",
     "selectProjectDescription": "사이드바에서 프로젝트를 선택하여 Claude와 코딩을 시작하세요. 각 프로젝트에는 채팅 세션과 파일 히스토리가 포함됩니다.",
+    "emptyRemoteTitle": "No remote project list yet",
+    "emptyRemoteDescription": "Remote project discovery and sessions are on the roadmap. Use “This machine” in the Servers view to return to the local project list, or open Settings for appearance and API options that still work in remote mode.",
     "tip": "팁",
     "createProjectMobile": "위의 메뉴 버튼을 눌러 프로젝트에 접근하세요",
     "createProjectDesktop": "사이드바의 폴더 아이콘을 클릭하여 새 프로젝트를 생성하세요",
     "newSession": "새 세션",
     "untitledSession": "제목 없는 세션",
     "projectFiles": "프로젝트 파일"
+  },
+  "remoteTarget": {
+    "tabDisabled": "Not available in a remote workspace until that feature is wired to the SSH target (per §7.1).",
+    "mainWorkspaceTitle": "Remote workspace: {{name}}",
+    "mainWorkspaceBody": "A project on this list still refers to the host running CloudCLI. When remote sessions and file tools are implemented, the main view will use the SSH target you selected."
   },
   "fileTree": {
     "loading": "파일 로딩 중...",

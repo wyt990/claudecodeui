@@ -1,4 +1,4 @@
-import { useEffect } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useDeviceSettings } from '../../../hooks/useDeviceSettings';
 import { useVersionCheck } from '../../../hooks/useVersionCheck';
@@ -7,12 +7,16 @@ import { useSidebarController } from '../hooks/useSidebarController';
 import { useTaskMaster } from '../../../contexts/TaskMasterContext';
 import { useTasksSettings } from '../../../contexts/TasksSettingsContext';
 import { useAuth } from '../../auth/context/AuthContext';
+import { useEnvironment } from '../../../contexts/EnvironmentContext';
+import { api } from '../../../utils/api';
 import type { Project, SessionProvider } from '../../../types/app';
 import type { MCPServerStatus, SidebarProps } from '../types/types';
 import SidebarCollapsed from './subcomponents/SidebarCollapsed';
 import SidebarContent from './subcomponents/SidebarContent';
 import SidebarModals from './subcomponents/SidebarModals';
 import type { SidebarProjectListProps } from './subcomponents/SidebarProjectList';
+import OpenRemoteProjectDialog from './subcomponents/OpenRemoteProjectDialog';
+import ProjectClaudeMdRemoteModal from './subcomponents/ProjectClaudeMdRemoteModal';
 
 type TaskMasterSidebarContext = {
   setCurrentProject: (project: Project) => void;
@@ -49,6 +53,42 @@ function Sidebar({
   const { setCurrentProject, mcpServerStatus } = useTaskMaster() as TaskMasterSidebarContext;
   const { tasksEnabled } = useTasksSettings();
   const auth = useAuth();
+  const { isRemote, currentTarget } = useEnvironment();
+  const remoteWorkspaceLabel = isRemote && currentTarget.kind === 'remote' ? currentTarget.displayName : null;
+
+  const [remoteClaudeOpenBusyName, setRemoteClaudeOpenBusyName] = useState<string | null>(null);
+  const [claudeMdProject, setClaudeMdProject] = useState<Project | null>(null);
+  const [openRemotePathDialog, setOpenRemotePathDialog] = useState(false);
+  const handleOpenRemoteClaudeProject = useCallback(
+    async (project: Project) => {
+      if (!isRemote || currentTarget.kind !== 'remote' || !project?.__cloudcliRemote) {
+        return;
+      }
+      setRemoteClaudeOpenBusyName(project.name);
+      try {
+        const res = await api.sshServers.openClaudeProject(currentTarget.serverId, { projectName: project.name });
+        const j = (await res.json().catch(() => ({}))) as { error?: string };
+        if (!res.ok) {
+          window.alert(j.error || t('projects.openOnRemoteFailed'));
+          return;
+        }
+        if (window.refreshProjects) {
+          void window.refreshProjects();
+        }
+      } catch (e) {
+        window.alert(e instanceof Error ? e.message : t('projects.openOnRemoteFailed'));
+      } finally {
+        setRemoteClaudeOpenBusyName(null);
+      }
+    },
+    [currentTarget, isRemote, t],
+  );
+
+  const onAfterRemotePathOpen = useCallback(() => {
+    if (window.refreshProjects) {
+      void window.refreshProjects();
+    }
+  }, []);
 
   const {
     isSidebarCollapsed,
@@ -184,6 +224,13 @@ function Sidebar({
       void updateSessionSummary(projectName, sessionId, summary, provider);
     },
     t,
+    onOpenRemoteClaudeProject:
+      isRemote && currentTarget.kind === 'remote' ? handleOpenRemoteClaudeProject : undefined,
+    remoteClaudeOpenBusyName: remoteClaudeOpenBusyName,
+    isRemoteContext: isRemote,
+    onOpenRemoteProjectByPath: isRemote && currentTarget.kind === 'remote' ? () => setOpenRemotePathDialog(true) : undefined,
+    onOpenClaudeMdRemote:
+      isRemote && currentTarget.kind === 'remote' ? (p: Project) => setClaudeMdProject(p) : undefined,
   };
 
   return (
@@ -211,6 +258,30 @@ function Sidebar({
         t={t}
       />
 
+      {isRemote && currentTarget.kind === 'remote' && claudeMdProject && (
+        <ProjectClaudeMdRemoteModal
+          open
+          onOpenChange={(o) => {
+            if (!o) {
+              setClaudeMdProject(null);
+            }
+          }}
+          serverId={currentTarget.serverId}
+          project={claudeMdProject}
+          t={t}
+        />
+      )}
+
+      {isRemote && currentTarget.kind === 'remote' && (
+        <OpenRemoteProjectDialog
+          open={openRemotePathDialog}
+          onOpenChange={setOpenRemotePathDialog}
+          serverId={currentTarget.serverId}
+          onSuccess={onAfterRemotePathOpen}
+          t={t}
+        />
+      )}
+
       {isSidebarCollapsed ? (
         <SidebarCollapsed
           onExpand={handleExpandSidebar}
@@ -231,7 +302,7 @@ function Sidebar({
             onSearchFilterChange={setSearchFilter}
             onClearSearchFilter={() => setSearchFilter('')}
             searchMode={searchMode}
-            onSearchModeChange={(mode: 'projects' | 'conversations') => {
+            onSearchModeChange={(mode: 'projects' | 'conversations' | 'servers') => {
               setSearchMode(mode);
               if (mode === 'projects') clearConversationResults();
             }}
@@ -265,7 +336,11 @@ function Sidebar({
               void refreshProjects();
             }}
             isRefreshing={isRefreshing}
+            isRemoteContext={isRemote}
+            remoteWorkspaceLabel={remoteWorkspaceLabel}
+            createProjectDisabled={isRemote}
             onCreateProject={() => setShowNewProject(true)}
+            onOpenRemoteProjectByPath={() => setOpenRemotePathDialog(true)}
             onCollapseSidebar={handleCollapseSidebar}
             updateAvailable={updateAvailable}
             releaseInfo={releaseInfo}

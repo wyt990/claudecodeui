@@ -9,8 +9,9 @@ import SidebarFooter from './SidebarFooter';
 import SidebarHeader from './SidebarHeader';
 import SidebarProjectList, { type SidebarProjectListProps } from './SidebarProjectList';
 import SidebarProjectsFileView from './SidebarProjectsFileView';
+import SidebarServersPanel from './SidebarServersPanel';
 
-type SearchMode = 'projects' | 'conversations';
+type SearchMode = 'projects' | 'conversations' | 'servers';
 
 function HighlightedSnippet({ snippet, highlights }: { snippet: string; highlights: { start: number; end: number }[] }) {
   const parts: ReactNode[] = [];
@@ -62,6 +63,10 @@ type SidebarContentProps = {
   onLogout?: () => void;
   projectListProps: SidebarProjectListProps;
   onOpenProjectFile?: (path: string, options?: { preferEditorOnlyLayout?: boolean }) => void;
+  isRemoteContext?: boolean;
+  remoteWorkspaceLabel?: string | null;
+  createProjectDisabled?: boolean;
+  onOpenRemoteProjectByPath?: () => void;
   t: TFunction;
 };
 
@@ -91,6 +96,10 @@ export default function SidebarContent({
   onLogout,
   projectListProps,
   onOpenProjectFile,
+  isRemoteContext = false,
+  remoteWorkspaceLabel = null,
+  createProjectDisabled = false,
+  onOpenRemoteProjectByPath,
   t,
 }: SidebarContentProps) {
   const showConversationSearch = searchMode === 'conversations' && searchFilter.trim().length >= 2;
@@ -114,9 +123,23 @@ export default function SidebarContent({
         onRefresh={onRefresh}
         isRefreshing={isRefreshing}
         onCreateProject={onCreateProject}
+        createProjectDisabled={createProjectDisabled}
+        onOpenRemoteProjectByPath={onOpenRemoteProjectByPath}
+        isRemoteContext={isRemoteContext}
         onCollapseSidebar={onCollapseSidebar}
         t={t}
       />
+
+      {isRemoteContext && (searchMode === 'projects' || searchMode === 'conversations') && (
+        <div
+          className="mx-1.5 mt-1.5 flex-shrink-0 rounded-lg border border-amber-500/30 bg-amber-500/10 px-2.5 py-2 text-[11px] leading-relaxed text-amber-950 dark:text-amber-100 md:mx-2.5"
+          role="status"
+        >
+          {remoteWorkspaceLabel
+            ? t('search.remoteContextWithName', { name: remoteWorkspaceLabel })
+            : t('search.remoteContextBanner')}
+        </div>
+      )}
 
       {showConversationSearch ? (
         <ScrollArea className="flex-1 overflow-y-auto overscroll-contain md:px-1.5 md:py-2">
@@ -214,6 +237,8 @@ export default function SidebarContent({
             </div>
           ) : null}
         </ScrollArea>
+      ) : searchMode === 'servers' ? (
+        <SidebarServersPanel t={t} />
       ) : searchMode === 'projects' ? (
         <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
           <SidebarProjectsFileView
@@ -226,6 +251,10 @@ export default function SidebarContent({
             onProjectSelect={projectListProps.onProjectSelect}
             onToggleStarProject={projectListProps.onToggleStarProject}
             onOpenProjectFile={onOpenProjectFile}
+            isRemoteContext={isRemoteContext}
+            onOpenRemoteProjectByPath={onOpenRemoteProjectByPath}
+            onOpenRemoteClaudeProject={projectListProps.onOpenRemoteClaudeProject}
+            remoteClaudeOpenBusyName={projectListProps.remoteClaudeOpenBusyName}
             t={t}
           />
         </div>

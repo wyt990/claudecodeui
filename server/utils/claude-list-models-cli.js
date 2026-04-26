@@ -102,7 +102,11 @@ export function parseClaudecodeListModelsText(text) {
   let inPicker = false;
   for (const line of lines) {
     const trimmed = line.trim();
-    if (trimmed.includes('可用模型列表 (Model Picker)')) {
+    const isPickerHeader =
+      (trimmed.includes('可用模型列表') && trimmed.includes('Model Picker')) ||
+      /\(Model Picker\)/i.test(trimmed) ||
+      /^=+\s*Model Picker\s*$/i.test(trimmed);
+    if (isPickerHeader) {
       inPicker = true;
       continue;
     }
@@ -111,6 +115,7 @@ export function parseClaudecodeListModelsText(text) {
     if (
       trimmed.startsWith('OpenAI 兼容 Provider') ||
       trimmed.startsWith('Zen 免费模型') ||
+      (trimmed.startsWith('OpenAI') && trimmed.includes('Provider 环境')) ||
       trimmed === '=== 信息结束 ===' ||
       (trimmed.startsWith('===') && trimmed.includes('信息'))
     ) {

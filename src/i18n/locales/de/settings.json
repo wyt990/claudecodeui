@@ -1,5 +1,9 @@
 {
   "title": "Einstellungen",
+  "remoteTarget": {
+    "banner": "You are in a remote workspace. Tabs that only apply to the local host (agents with CLI login, MCP, Git, TaskMaster, plugins, and Web Push) are disabled. Appearance, API tokens, and About remain available.",
+    "sidebarTabDisabled": "Not available in a remote workspace (local CLI / host integration)."
+  },
   "tabs": {
     "account": "Konto",
     "permissions": "Berechtigungen",

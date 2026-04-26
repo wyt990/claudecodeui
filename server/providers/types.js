@@ -115,5 +115,6 @@ export function createNormalizedMessage(fields) {
     sessionId: fields.sessionId || '',
     timestamp: fields.timestamp || new Date().toISOString(),
     provider: fields.provider,
+    targetKey: fields.targetKey != null && String(fields.targetKey) !== '' ? String(fields.targetKey) : 'local',
   };
 }

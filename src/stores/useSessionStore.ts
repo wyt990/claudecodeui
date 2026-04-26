@@ -1,8 +1,8 @@
 /**
  * Session-keyed message store.
  *
- * Holds per-session state in a Map keyed by sessionId.
- * Session switch = change activeSessionId pointer. No clearing. Old data stays.
+ * Holds per-session state in a Map keyed by **targetKey + sessionId**（`getSessionStoreKey`）.
+ * Session switch = change activeSessionId pointer. 切换 `targetKey` 时由上层 `clearEntireStore()` 全清，避免串环境。
  * WebSocket handler = store.appendRealtime(msg.sessionId, msg). One line.
  * No localStorage for messages. Backend JSONL is the source of truth.
  */
@@ -10,6 +10,7 @@
 import { useCallback, useMemo, useRef, useState } from 'react';
 import type { SessionProvider } from '../types/app';
 import { authenticatedFetch } from '../utils/api';
+import { getSessionStoreKey } from '../utils/sessionStoreKey.js';
 
 // ─── NormalizedMessage (mirrors server/adapters/types.js) ────────────────────
 
@@ -63,6 +64,8 @@ export interface NormalizedMessage {
   // Cursor-specific ordering
   sequence?: number;
   rowid?: number;
+  /** 与 `x-cloudcli-target` 一致，缺省在服务端归约为 `local` */
+  targetKey?: string;
 }
 
 // ─── Per-session slot ────────────────────────────────────────────────────────
@@ -143,8 +146,10 @@ export function useSessionStore() {
   const activeSessionIdRef = useRef<string | null>(null);
   // Bump to force re-render — only when the active session's data changes
   const [, setTick] = useState(0);
-  const notify = useCallback((sessionId: string) => {
-    if (sessionId === activeSessionIdRef.current) {
+  const notify = useCallback((rawSessionId: string) => {
+    const want = getSessionStoreKey(rawSessionId);
+    const act = activeSessionIdRef.current ? getSessionStoreKey(activeSessionIdRef.current) : null;
+    if (act !== null && want === act) {
       setTick(n => n + 1);
     }
   }, []);
@@ -153,15 +158,22 @@ export function useSessionStore() {
     activeSessionIdRef.current = sessionId;
   }, []);
 
-  const getSlot = useCallback((sessionId: string): SessionSlot => {
+  const getSlot = useCallback((rawSessionId: string): SessionSlot => {
+    const key = getSessionStoreKey(rawSessionId);
     const store = storeRef.current;
-    if (!store.has(sessionId)) {
-      store.set(sessionId, createEmptySlot());
+    if (!store.has(key)) {
+      store.set(key, createEmptySlot());
     }
-    return store.get(sessionId)!;
+    return store.get(key)!;
   }, []);
 
-  const has = useCallback((sessionId: string) => storeRef.current.has(sessionId), []);
+  const has = useCallback((rawSessionId: string) => storeRef.current.has(getSessionStoreKey(rawSessionId)), []);
+
+  const clearEntireStore = useCallback(() => {
+    storeRef.current.clear();
+    activeSessionIdRef.current = null;
+    setTick(n => n + 1);
+  }, []);
 
   /**
    * Fetch messages from the unified endpoint and populate serverMessages.
@@ -347,8 +359,8 @@ export function useSessionStore() {
   /**
    * Check if a session's data is stale (>30s old).
    */
-  const isStale = useCallback((sessionId: string) => {
-    const slot = storeRef.current.get(sessionId);
+  const isStale = useCallback((rawSessionId: string) => {
+    const slot = storeRef.current.get(getSessionStoreKey(rawSessionId));
     if (!slot) return true;
     return Date.now() - slot.fetchedAt > STALE_THRESHOLD_MS;
   }, []);
@@ -357,12 +369,13 @@ export function useSessionStore() {
    * Update or create a streaming message (accumulated text so far).
    * Uses a well-known ID so subsequent calls replace the same message.
    */
-  const updateStreaming = useCallback((sessionId: string, accumulatedText: string, msgProvider: SessionProvider) => {
-    const slot = getSlot(sessionId);
-    const streamId = `__streaming_${sessionId}`;
+  const updateStreaming = useCallback((rawSessionId: string, accumulatedText: string, msgProvider: SessionProvider) => {
+    const key = getSessionStoreKey(rawSessionId);
+    const slot = getSlot(rawSessionId);
+    const streamId = `__streaming_${key}`;
     const msg: NormalizedMessage = {
       id: streamId,
-      sessionId,
+      sessionId: rawSessionId,
       timestamp: new Date().toISOString(),
       provider: msgProvider,
       kind: 'stream_delta',
@@ -376,17 +389,18 @@ export function useSessionStore() {
       slot.realtimeMessages = [...slot.realtimeMessages, msg];
     }
     recomputeMergedIfNeeded(slot);
-    notify(sessionId);
+    notify(rawSessionId);
   }, [getSlot, notify]);
 
   /**
    * Finalize streaming: convert the streaming message to a regular text message.
    * The well-known streaming ID is replaced with a unique text message ID.
    */
-  const finalizeStreaming = useCallback((sessionId: string) => {
-    const slot = storeRef.current.get(sessionId);
+  const finalizeStreaming = useCallback((rawSessionId: string) => {
+    const key = getSessionStoreKey(rawSessionId);
+    const slot = storeRef.current.get(key);
     if (!slot) return;
-    const streamId = `__streaming_${sessionId}`;
+    const streamId = `__streaming_${key}`;
     const idx = slot.realtimeMessages.findIndex(m => m.id === streamId);
     if (idx >= 0) {
       const stream = slot.realtimeMessages[idx];
@@ -398,39 +412,41 @@ export function useSessionStore() {
         role: 'assistant',
       };
       recomputeMergedIfNeeded(slot);
-      notify(sessionId);
+      notify(rawSessionId);
     }
   }, [notify]);
 
   /**
    * Clear realtime messages for a session (e.g., after stream completes and server fetch catches up).
    */
-  const clearRealtime = useCallback((sessionId: string) => {
-    const slot = storeRef.current.get(sessionId);
+  const clearRealtime = useCallback((rawSessionId: string) => {
+    const key = getSessionStoreKey(rawSessionId);
+    const slot = storeRef.current.get(key);
     if (slot) {
       slot.realtimeMessages = [];
       recomputeMergedIfNeeded(slot);
-      notify(sessionId);
+      notify(rawSessionId);
     }
   }, [notify]);
 
   /**
    * Get merged messages for a session (for rendering).
    */
-  const getMessages = useCallback((sessionId: string): NormalizedMessage[] => {
-    return storeRef.current.get(sessionId)?.merged ?? [];
+  const getMessages = useCallback((rawSessionId: string): NormalizedMessage[] => {
+    return storeRef.current.get(getSessionStoreKey(rawSessionId))?.merged ?? [];
   }, []);
 
   /**
    * Get session slot (for status, pagination info, etc.).
    */
-  const getSessionSlot = useCallback((sessionId: string): SessionSlot | undefined => {
-    return storeRef.current.get(sessionId);
+  const getSessionSlot = useCallback((rawSessionId: string): SessionSlot | undefined => {
+    return storeRef.current.get(getSessionStoreKey(rawSessionId));
   }, []);
 
   return useMemo(() => ({
     getSlot,
     has,
+    clearEntireStore,
     fetchFromServer,
     fetchMore,
     appendRealtime,
@@ -445,7 +461,7 @@ export function useSessionStore() {
     getMessages,
     getSessionSlot,
   }), [
-    getSlot, has, fetchFromServer, fetchMore,
+    getSlot, has, clearEntireStore, fetchFromServer, fetchMore,
     appendRealtime, appendRealtimeBatch, refreshFromServer,
     setActiveSession, setStatus, isStale, updateStreaming, finalizeStreaming,
     clearRealtime, getMessages, getSessionSlot,

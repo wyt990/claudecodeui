@@ -112,6 +112,7 @@
     "placeholder": "/를 입력하여 명령어, @를 입력하여 파일, 또는 {{provider}}에게 무엇이든 물어보세요...",
     "placeholderDefault": "메시지를 입력하세요...",
     "disabled": "입력 비활성화",
+    "remoteReadOnly": "Read-only: viewing history on the remote target. Full chat in a later release (P2).",
     "attachFiles": "파일 첨부",
     "attachImages": "이미지 첨부",
     "send": "전송",
@@ -224,7 +225,13 @@
     "resumeSession": "세션 재개: {{displayName}}...",
     "runCommand": "{{projectName}}에서 {{command}} 실행",
     "startCli": "{{projectName}}에서 Claude CLI 시작",
-    "defaultCommand": "명령어"
+    "defaultCommand": "명령어",
+    "subTabs": {
+      "label": "터미널 {{index}}",
+      "add": "새 터미널",
+      "addTitle": "같은 프로젝트에 터미널 탭 추가",
+      "closeTitle": "이 터미널 탭 닫기"
+    }
   },
   "claudeStatus": {
     "actions": {

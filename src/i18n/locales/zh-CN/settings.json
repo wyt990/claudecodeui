@@ -1,5 +1,9 @@
 {
   "title": "设置",
+  "remoteTarget": {
+    "banner": "当前为远程工作区。仅作用于本机 CLI/宿主机的设置项已禁用，包括：代理与账号登录、MCP、Git、TaskMaster、插件、Web 推送。外观、API 令牌、关于 仍可使用。",
+    "sidebarTabDisabled": "远程工作区下暂不可用（与本机或宿主 CLI 相关）。"
+  },
   "tabs": {
     "account": "账户",
     "permissions": "权限",

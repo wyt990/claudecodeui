@@ -3,6 +3,7 @@ import type { Dispatch, MutableRefObject, SetStateAction } from 'react';
 import type { PendingPermissionRequest } from '../types/types';
 import type { Project, ProjectSession, SessionProvider } from '../../../types/app';
 import type { SessionStore, NormalizedMessage } from '../../../stores/useSessionStore';
+import { getTargetKey } from '../../../utils/targetKey.js';
 
 type PendingViewSession = {
   sessionId: string | null;
@@ -18,6 +19,7 @@ type LatestChatMessage = {
   sessionId?: string;
   session_id?: string;
   requestId?: string;
+  targetKey?: string;
   toolName?: string;
   input?: unknown;
   context?: unknown;
@@ -106,14 +108,18 @@ export function useChatRealtimeHandlers({
     if (lastProcessedMessageRef.current === latestMessage) return;
     lastProcessedMessageRef.current = latestMessage;
 
+    const msg = latestMessage as LatestChatMessage;
+    const incomingTarget = (msg.targetKey ?? 'local') as 'local' | `remote:${number}` | string;
+    if (incomingTarget !== getTargetKey()) {
+      return;
+    }
+
     const activeViewSessionId =
       selectedSession?.id || currentSessionId || pendingViewSessionRef.current?.sessionId || null;
 
     /* ---------------------------------------------------------------- */
     /*  Legacy messages (no `kind` field) — handle and return           */
     /* ---------------------------------------------------------------- */
-
-    const msg = latestMessage as any;
 
     if (!msg.kind) {
       const messageType = String(msg.type || '');
@@ -297,11 +303,12 @@ export function useChatRealtimeHandlers({
       }
 
       case 'permission_request': {
-        if (!msg.requestId) break;
+        const permissionRequestId = msg.requestId;
+        if (!permissionRequestId) break;
         setPendingPermissionRequests((prev) => {
-          if (prev.some((r: PendingPermissionRequest) => r.requestId === msg.requestId)) return prev;
+          if (prev.some((r: PendingPermissionRequest) => r.requestId === permissionRequestId)) return prev;
           return [...prev, {
-            requestId: msg.requestId,
+            requestId: permissionRequestId,
             toolName: msg.toolName || 'UnknownTool',
             input: msg.input,
             context: msg.context,

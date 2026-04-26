@@ -210,6 +210,104 @@ const runMigrations = () => {
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP
     )`);
 
+    // SSH remote servers (P0 — groups, servers, encrypted secrets)
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS ssh_server_groups (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id INTEGER NOT NULL,
+        name TEXT NOT NULL,
+        sort_order INTEGER NOT NULL DEFAULT 0,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+      )
+    `);
+    db.exec('CREATE INDEX IF NOT EXISTS idx_ssh_server_groups_user ON ssh_server_groups(user_id)');
+
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS ssh_servers (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id INTEGER NOT NULL,
+        group_id INTEGER,
+        display_name TEXT NOT NULL,
+        host TEXT NOT NULL,
+        port INTEGER NOT NULL DEFAULT 22,
+        username TEXT NOT NULL,
+        auth_type TEXT NOT NULL CHECK (auth_type IN ('private_key', 'password')),
+        host_key_fingerprint TEXT,
+        last_connected_at DATETIME,
+        last_error TEXT,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+        FOREIGN KEY (group_id) REFERENCES ssh_server_groups(id) ON DELETE SET NULL
+      )
+    `);
+    db.exec('CREATE INDEX IF NOT EXISTS idx_ssh_servers_user ON ssh_servers(user_id)');
+
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS ssh_server_secrets (
+        server_id INTEGER PRIMARY KEY,
+        secret_blob TEXT NOT NULL,
+        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (server_id) REFERENCES ssh_servers(id) ON DELETE CASCADE
+      )
+    `);
+
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS remote_config_templates (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id INTEGER NOT NULL,
+        name TEXT NOT NULL,
+        kind TEXT NOT NULL CHECK (kind IN ('llm', 'claude_md')),
+        payload_json TEXT NOT NULL,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+      )
+    `);
+    db.exec('CREATE INDEX IF NOT EXISTS idx_remote_cfg_tpl_user ON remote_config_templates(user_id, kind)');
+
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS remote_server_llm_draft (
+        user_id INTEGER NOT NULL,
+        server_id INTEGER NOT NULL,
+        payload_json TEXT NOT NULL,
+        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        PRIMARY KEY (user_id, server_id),
+        FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+      )
+    `);
+
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS claude_provider_catalog (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id INTEGER NOT NULL,
+        channel_id TEXT NOT NULL,
+        base_url TEXT NOT NULL,
+        models_raw TEXT NOT NULL,
+        api_key_encrypted TEXT,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+        UNIQUE (user_id, channel_id)
+      )
+    `);
+    db.exec('CREATE INDEX IF NOT EXISTS idx_claude_provider_cat_user ON claude_provider_catalog(user_id)');
+
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS ssh_server_claude_provider_prefs (
+        user_id INTEGER NOT NULL,
+        server_id INTEGER NOT NULL,
+        selected_entry_ids_json TEXT NOT NULL DEFAULT '[]',
+        openai_compat INTEGER NOT NULL DEFAULT 1,
+        zen_free INTEGER NOT NULL DEFAULT 0,
+        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        PRIMARY KEY (user_id, server_id),
+        FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+        FOREIGN KEY (server_id) REFERENCES ssh_servers(id) ON DELETE CASCADE
+      )
+    `);
+
     // Create default workspace for existing users if none exists
     const usersWithoutWorkspace = db.prepare(`
       SELECT u.id, u.username
@@ -1040,6 +1138,316 @@ const userSettingsDb = {
   }
 };
 
+// SSH server registry (user-scoped, P0)
+const sshServersDb = {
+  listGroups: (userId) => {
+    return db.prepare(
+      'SELECT * FROM ssh_server_groups WHERE user_id = ? ORDER BY sort_order ASC, id ASC',
+    ).all(userId);
+  },
+
+  createGroup: (userId, name) => {
+    const row = db.prepare('SELECT COALESCE(MAX(sort_order), -1) + 1 AS n FROM ssh_server_groups WHERE user_id = ?').get(userId);
+    const sortOrder = row?.n ?? 0;
+    const result = db.prepare(
+      'INSERT INTO ssh_server_groups (user_id, name, sort_order) VALUES (?, ?, ?)',
+    ).run(userId, name.trim(), sortOrder);
+    // lastInsertRowid 在部分环境下可能为 BigInt，JSON 序列化会失败
+    return {
+      id: Number(result.lastInsertRowid),
+      name: name.trim(),
+      sort_order: sortOrder,
+    };
+  },
+
+  updateGroup: (userId, groupId, updates) => {
+    const fields = [];
+    const values = [];
+    if (updates.name !== undefined) {
+      fields.push('name = ?');
+      values.push(String(updates.name).trim());
+    }
+    if (updates.sort_order !== undefined) {
+      fields.push('sort_order = ?');
+      values.push(parseInt(updates.sort_order, 10));
+    }
+    if (fields.length === 0) {
+      return false;
+    }
+    values.push(groupId, userId);
+    const stmt = db.prepare(`UPDATE ssh_server_groups SET ${fields.join(', ')} WHERE id = ? AND user_id = ?`);
+    return stmt.run(...values).changes > 0;
+  },
+
+  deleteGroup: (userId, groupId) => {
+    const count = db.prepare('SELECT COUNT(*) AS c FROM ssh_servers WHERE group_id = ? AND user_id = ?').get(groupId, userId);
+    if (count && count.c > 0) {
+      return { ok: false, error: 'Group still has servers; move or delete them first.' };
+    }
+    const r = db.prepare('DELETE FROM ssh_server_groups WHERE id = ? AND user_id = ?').run(groupId, userId);
+    return { ok: r.changes > 0 };
+  },
+
+  listServers: (userId) => {
+    return db.prepare(`
+      SELECT s.*, g.name AS group_name
+      FROM ssh_servers s
+      LEFT JOIN ssh_server_groups g ON s.group_id = g.id
+      WHERE s.user_id = ?
+      ORDER BY g.sort_order ASC, g.id ASC, s.display_name COLLATE NOCASE ASC
+    `).all(userId);
+  },
+
+  getServer: (userId, serverId) => {
+    return db.prepare('SELECT * FROM ssh_servers WHERE id = ? AND user_id = ?').get(serverId, userId);
+  },
+
+  createServer: (userId, data) => {
+    const {
+      display_name: displayName,
+      host,
+      port = 22,
+      username,
+      auth_type: authType,
+      group_id: groupId = null,
+    } = data;
+    const result = db.prepare(`
+      INSERT INTO ssh_servers (user_id, group_id, display_name, host, port, username, auth_type)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      userId,
+      groupId || null,
+      String(displayName).trim(),
+      String(host).trim(),
+      parseInt(port, 10) || 22,
+      String(username).trim(),
+      authType,
+    );
+    return { id: result.lastInsertRowid };
+  },
+
+  updateServer: (userId, serverId, updates) => {
+    const fields = [];
+    const values = [];
+    if (updates.display_name !== undefined) {
+      fields.push('display_name = ?');
+      values.push(String(updates.display_name).trim());
+    }
+    if (updates.host !== undefined) {
+      fields.push('host = ?');
+      values.push(String(updates.host).trim());
+    }
+    if (updates.port !== undefined) {
+      fields.push('port = ?');
+      values.push(parseInt(updates.port, 10));
+    }
+    if (updates.username !== undefined) {
+      fields.push('username = ?');
+      values.push(String(updates.username).trim());
+    }
+    if (updates.auth_type !== undefined) {
+      fields.push('auth_type = ?');
+      values.push(updates.auth_type);
+    }
+    if (updates.group_id !== undefined) {
+      fields.push('group_id = ?');
+      values.push(updates.group_id === null ? null : updates.group_id);
+    }
+    if (updates.host_key_fingerprint !== undefined) {
+      fields.push('host_key_fingerprint = ?');
+      values.push(updates.host_key_fingerprint);
+    }
+    if (fields.length === 0) {
+      return false;
+    }
+    fields.push('updated_at = CURRENT_TIMESTAMP');
+    values.push(serverId, userId);
+    const stmt = db.prepare(`UPDATE ssh_servers SET ${fields.join(', ')} WHERE id = ? AND user_id = ?`);
+    return stmt.run(...values).changes > 0;
+  },
+
+  deleteServer: (userId, serverId) => {
+    return db.prepare('DELETE FROM ssh_servers WHERE id = ? AND user_id = ?').run(serverId, userId).changes > 0;
+  },
+
+  setSecretBlob: (serverId, secretBlobB64) => {
+    db.prepare(`
+      INSERT INTO ssh_server_secrets (server_id, secret_blob, updated_at)
+      VALUES (?, ?, CURRENT_TIMESTAMP)
+      ON CONFLICT(server_id) DO UPDATE SET
+        secret_blob = excluded.secret_blob,
+        updated_at = CURRENT_TIMESTAMP
+    `).run(serverId, secretBlobB64);
+  },
+
+  getSecretBlob: (userId, serverId) => {
+    const row = db.prepare(`
+      SELECT ss.secret_blob
+      FROM ssh_server_secrets ss
+      INNER JOIN ssh_servers s ON s.id = ss.server_id
+      WHERE ss.server_id = ? AND s.user_id = ?
+    `).get(serverId, userId);
+    return row?.secret_blob || null;
+  },
+
+  deleteSecrets: (serverId) => {
+    db.prepare('DELETE FROM ssh_server_secrets WHERE server_id = ?').run(serverId);
+  },
+
+  hasSecrets: (userId, serverId) => {
+    const row = db.prepare(`
+      SELECT 1 AS x FROM ssh_server_secrets ss
+      INNER JOIN ssh_servers s ON s.id = ss.server_id
+      WHERE ss.server_id = ? AND s.user_id = ?
+    `).get(serverId, userId);
+    return Boolean(row);
+  },
+
+  touchServerConnection: (userId, serverId, ok, errorMessage, fingerprint) => {
+    if (ok) {
+      db.prepare(`
+        UPDATE ssh_servers
+        SET last_connected_at = CURRENT_TIMESTAMP, last_error = NULL,
+            host_key_fingerprint = COALESCE(?, host_key_fingerprint),
+            updated_at = CURRENT_TIMESTAMP
+        WHERE id = ? AND user_id = ?
+      `).run(fingerprint || null, serverId, userId);
+    } else {
+      const msg = (errorMessage || 'Connection failed').slice(0, 2000);
+      db.prepare(`
+        UPDATE ssh_servers SET last_error = ?, updated_at = CURRENT_TIMESTAMP
+        WHERE id = ? AND user_id = ?
+      `).run(msg, serverId, userId);
+    }
+  },
+};
+
+const claudeProviderCatalogDb = {
+  list: (userId) => {
+    return db
+      .prepare(
+        'SELECT id, channel_id, base_url, models_raw, api_key_encrypted IS NOT NULL AS has_api_key, created_at, updated_at FROM claude_provider_catalog WHERE user_id = ? ORDER BY id ASC',
+      )
+      .all(userId);
+  },
+  get: (userId, id) => {
+    return db
+      .prepare('SELECT * FROM claude_provider_catalog WHERE id = ? AND user_id = ?')
+      .get(id, userId);
+  },
+  create: (userId, channelId, baseUrl, modelsRaw, apiKeyEnc) => {
+    const r = db
+      .prepare(
+        'INSERT INTO claude_provider_catalog (user_id, channel_id, base_url, models_raw, api_key_encrypted) VALUES (?, ?, ?, ?, ?)',
+      )
+      .run(userId, channelId, baseUrl, modelsRaw, apiKeyEnc);
+    return { id: r.lastInsertRowid };
+  },
+  update: (userId, id, channelId, baseUrl, modelsRaw, apiKeyEnc, updateKey) => {
+    if (updateKey) {
+      const r = db
+        .prepare(
+          'UPDATE claude_provider_catalog SET channel_id=?, base_url=?, models_raw=?, api_key_encrypted=?, updated_at=CURRENT_TIMESTAMP WHERE id=? AND user_id=?',
+        )
+        .run(channelId, baseUrl, modelsRaw, apiKeyEnc, id, userId);
+      return r.changes > 0;
+    }
+    const r = db
+      .prepare(
+        'UPDATE claude_provider_catalog SET channel_id=?, base_url=?, models_raw=?, updated_at=CURRENT_TIMESTAMP WHERE id=? AND user_id=?',
+      )
+      .run(channelId, baseUrl, modelsRaw, id, userId);
+    return r.changes > 0;
+  },
+  delete: (userId, id) => {
+    return db.prepare('DELETE FROM claude_provider_catalog WHERE id = ? AND user_id = ?').run(id, userId).changes > 0;
+  },
+};
+
+const sshServerClaudeProviderPrefsDb = {
+  get: (userId, serverId) => {
+    return db
+      .prepare('SELECT * FROM ssh_server_claude_provider_prefs WHERE user_id = ? AND server_id = ?')
+      .get(userId, serverId);
+  },
+  upsert: (userId, serverId, selectedEntryIds, openaiCompat, zenFree) => {
+    const j = JSON.stringify(
+      (Array.isArray(selectedEntryIds) ? selectedEntryIds : []).map((n) => parseInt(String(n), 10)).filter((n) => Number.isFinite(n)),
+    );
+    const oa = openaiCompat ? 1 : 0;
+    const z = zenFree ? 1 : 0;
+    db.prepare(
+      `INSERT INTO ssh_server_claude_provider_prefs (user_id, server_id, selected_entry_ids_json, openai_compat, zen_free, updated_at)
+       VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+       ON CONFLICT(user_id, server_id) DO UPDATE SET
+         selected_entry_ids_json=excluded.selected_entry_ids_json,
+         openai_compat=excluded.openai_compat,
+         zen_free=excluded.zen_free,
+         updated_at=CURRENT_TIMESTAMP`,
+    ).run(userId, serverId, j, oa, z);
+  },
+  /** @param {number} userId
+   *  @param {number} entryId
+   */
+  removeCatalogIdFromAllRows: (userId, entryId) => {
+    const rows = db
+      .prepare('SELECT server_id, selected_entry_ids_json FROM ssh_server_claude_provider_prefs WHERE user_id = ?')
+      .all(userId);
+    const u = db.prepare(
+      'UPDATE ssh_server_claude_provider_prefs SET selected_entry_ids_json = ?, updated_at = CURRENT_TIMESTAMP WHERE user_id = ? AND server_id = ?',
+    );
+    for (const r of rows) {
+      let arr = [];
+      try {
+        arr = JSON.parse(r.selected_entry_ids_json || '[]');
+      } catch {
+        /* */
+      }
+      const next = arr.map((n) => parseInt(String(n), 10)).filter((n) => Number.isFinite(n) && n !== entryId);
+      u.run(JSON.stringify(next), userId, r.server_id);
+    }
+  },
+};
+
+const remoteConfigTemplatesDb = {
+  list: (userId, kind) => {
+    if (kind && (kind === 'llm' || kind === 'claude_md')) {
+      return db
+        .prepare(
+          'SELECT id, name, kind, payload_json, created_at, updated_at FROM remote_config_templates WHERE user_id = ? AND kind = ? ORDER BY updated_at DESC',
+        )
+        .all(userId, kind);
+    }
+    return db
+      .prepare(
+        'SELECT id, name, kind, payload_json, created_at, updated_at FROM remote_config_templates WHERE user_id = ? ORDER BY kind, updated_at DESC',
+      )
+      .all(userId);
+  },
+  get: (userId, id) => {
+    return db
+      .prepare('SELECT * FROM remote_config_templates WHERE id = ? AND user_id = ?')
+      .get(id, userId);
+  },
+  create: (userId, name, kind, payloadJson) => {
+    const r = db
+      .prepare(
+        'INSERT INTO remote_config_templates (user_id, name, kind, payload_json) VALUES (?, ?, ?, ?)',
+      )
+      .run(userId, String(name).trim(), kind, payloadJson);
+    return { id: r.lastInsertRowid };
+  },
+  update: (userId, id, name, payloadJson) => {
+    const row = db
+      .prepare('UPDATE remote_config_templates SET name = ?, payload_json = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND user_id = ?')
+      .run(String(name).trim(), payloadJson, id, userId);
+    return row.changes > 0;
+  },
+  delete: (userId, id) => {
+    return db.prepare('DELETE FROM remote_config_templates WHERE id = ? AND user_id = ?').run(id, userId).changes > 0;
+  },
+};
+
 export {
   db,
   initializeDatabase,
@@ -1054,5 +1462,9 @@ export {
   githubTokensDb, // Backward compatibility
   userWorkspacesDb,
   userMcpConfigsDb,
-  userSettingsDb
+  userSettingsDb,
+  sshServersDb,
+  claudeProviderCatalogDb,
+  sshServerClaudeProviderPrefsDb,
+  remoteConfigTemplatesDb,
 };

@@ -130,6 +130,7 @@
     "placeholder": "Type / for commands, @ for files, or ask {{provider}} anything...",
     "placeholderDefault": "Type your message...",
     "disabled": "Input disabled",
+    "remoteReadOnly": "Read-only: viewing history on the remote target. Full chat in a later release (P2).",
     "attachFiles": "Attach files",
     "attachImages": "Attach images",
     "send": "Send",
@@ -242,7 +243,13 @@
     "resumeSession": "Resume session: {{displayName}}...",
     "runCommand": "Run {{command}} in {{projectName}}",
     "startCli": "Starting Claude CLI in {{projectName}}",
-    "defaultCommand": "command"
+    "defaultCommand": "command",
+    "subTabs": {
+      "label": "Terminal {{index}}",
+      "add": "New terminal",
+      "addTitle": "Add another terminal tab (same project)",
+      "closeTitle": "Close this terminal tab"
+    }
   },
   "claudeStatus": {
     "actions": {

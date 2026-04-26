@@ -94,6 +94,8 @@ interface ChatComposerProps {
   placeholder: string;
   isTextareaExpanded: boolean;
   sendByCtrlEnter?: boolean;
+  /** 远程 P1：仅历史只读，禁用输入与发送 */
+  readOnly?: boolean;
 }
 
 export default function ChatComposer({
@@ -153,6 +155,7 @@ export default function ChatComposer({
   placeholder,
   isTextareaExpanded,
   sendByCtrlEnter,
+  readOnly = false,
 }: ChatComposerProps) {
   const { t } = useTranslation('chat');
   const textareaRect = textareaRef.current?.getBoundingClientRect();
@@ -191,6 +194,14 @@ export default function ChatComposer({
           handlePermissionDecision={handlePermissionDecision}
           handleGrantToolPermission={handleGrantToolPermission}
         />
+
+        {readOnly && !hasQuestionPanel && (
+          <p className="mb-2 rounded-lg border border-border/60 bg-muted/30 px-3 py-2 text-sm text-muted-foreground">
+            {t('input.remoteReadOnly', {
+              defaultValue: 'Read-only: viewing history on the remote target. Full chat in a later release.',
+            })}
+          </p>
+        )}
 
         {!hasQuestionPanel && <ChatInputControls
           permissionMode={permissionMode}
@@ -302,6 +313,8 @@ export default function ChatComposer({
             <textarea
               ref={textareaRef}
               value={input}
+              readOnly={readOnly}
+              tabIndex={readOnly ? -1 : undefined}
               onChange={onInputChange}
               onClick={onTextareaClick}
               onKeyDown={onTextareaKeyDown}
@@ -310,13 +323,14 @@ export default function ChatComposer({
               onFocus={() => onInputFocusChange?.(true)}
               onBlur={() => onInputFocusChange?.(false)}
               onInput={onTextareaInput}
-              placeholder={placeholder}
+              placeholder={readOnly ? t('input.remoteReadOnly', { defaultValue: '' }) : placeholder}
               className="chat-input-placeholder block max-h-[40vh] min-h-[50px] w-full resize-none overflow-y-auto rounded-2xl bg-transparent py-1.5 pl-12 pr-20 text-base leading-6 text-foreground placeholder-muted-foreground/50 transition-all duration-200 focus:outline-none sm:max-h-[300px] sm:min-h-[80px] sm:py-4 sm:pr-40"
               style={{ height: '50px' }}
             />
 
             <button
               type="button"
+              disabled={readOnly}
               onClick={openImagePicker}
               className="absolute left-2 top-1/2 -translate-y-1/2 transform rounded-xl p-2 transition-colors hover:bg-accent/60"
               title={t('input.attachImages')}
@@ -333,7 +347,7 @@ export default function ChatComposer({
 
             <button
               type="submit"
-              disabled={!input.trim() || isLoading}
+              disabled={readOnly || !input.trim() || isLoading}
               onMouseDown={(event) => {
                 event.preventDefault();
                 onSubmit(event);

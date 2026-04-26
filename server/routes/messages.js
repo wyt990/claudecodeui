@@ -11,20 +11,13 @@
 
 import express from 'express';
 import { getProvider, getAllProviders } from '../providers/registry.js';
+import { parseTargetScope } from '../utils/parse-target-scope.js';
+import { getRemoteClaudeSessionMessages } from '../remote/remote-claude-data.js';
 
 const router = express.Router();
 
 /**
  * GET /api/sessions/:sessionId/messages
- *
- * Auth: authenticateToken applied at mount level in index.js
- *
- * Query params:
- *   provider    - 'claude' | 'cursor' | 'codex' | 'gemini' (default: 'claude')
- *   projectName - required for claude provider
- *   projectPath - required for cursor provider (absolute path used for cwdId hash)
- *   limit       - page size (omit or null for all)
- *   offset      - pagination offset (default: 0)
  */
 router.get('/:sessionId/messages', async (req, res) => {
   try {
@@ -37,6 +30,35 @@ router.get('/:sessionId/messages', async (req, res) => {
       ? parseInt(limitParam, 10)
       : null;
     const offset = parseInt(req.query.offset || '0', 10);
+
+    const scope = parseTargetScope(req);
+    if (scope.kind === 'invalid') {
+      return res.status(400).json({ error: scope.error, code: 'INVALID_TARGET' });
+    }
+    if (scope.kind === 'remote') {
+      if (provider !== 'claude') {
+        return res.status(501).json({
+          error: 'Remote target history (non-Claude) is not implemented in this release.',
+          code: 'REMOTE_HISTORY_NOT_SUPPORTED',
+        });
+      }
+      if (!projectName) {
+        return res.status(400).json({ error: 'projectName is required' });
+      }
+      const { sshServersDb } = await import('../database/db.js');
+      if (!sshServersDb.getServer(req.user.id, scope.serverId)) {
+        return res.status(404).json({ error: 'SSH server not found' });
+      }
+      const result = await getRemoteClaudeSessionMessages(
+        req.user.id,
+        scope.serverId,
+        projectName,
+        sessionId,
+        limit,
+        offset,
+      );
+      return res.json(result);
+    }
 
     const adapter = getProvider(provider);
     if (!adapter) {

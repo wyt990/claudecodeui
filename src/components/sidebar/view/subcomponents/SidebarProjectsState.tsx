@@ -1,6 +1,7 @@
 import { Folder, Search } from 'lucide-react';
 import type { TFunction } from 'i18next';
 import type { LoadingProgress } from '../../../../types/app';
+import { Button } from '../../../../shared/view/ui';
 
 type SidebarProjectsStateProps = {
   isLoading: boolean;
@@ -8,6 +9,8 @@ type SidebarProjectsStateProps = {
   projectsCount: number;
   filteredProjectsCount: number;
   t: TFunction;
+  isRemoteContext?: boolean;
+  onOpenRemoteProjectByPath?: () => void;
 };
 
 export default function SidebarProjectsState({
@@ -16,6 +19,8 @@ export default function SidebarProjectsState({
   projectsCount,
   filteredProjectsCount,
   t,
+  isRemoteContext = false,
+  onOpenRemoteProjectByPath,
 }: SidebarProjectsStateProps) {
   if (isLoading) {
     return (
@@ -59,6 +64,19 @@ export default function SidebarProjectsState({
         </div>
         <h3 className="mb-2 text-base font-medium text-foreground md:mb-1">{t('projects.noProjects')}</h3>
         <p className="text-sm text-muted-foreground">{t('projects.runClaudeCli')}</p>
+        {isRemoteContext && typeof onOpenRemoteProjectByPath === 'function' && (
+          <div className="mt-4">
+            <Button
+              type="button"
+              variant="default"
+              className="bg-emerald-600 text-white hover:bg-emerald-700"
+              onClick={onOpenRemoteProjectByPath}
+            >
+              {t('projects.openRemoteByPathButton')}
+            </Button>
+            <p className="mt-2 text-xs text-muted-foreground leading-relaxed">{t('projects.openRemoteByPathHint')}</p>
+          </div>
+        )}
       </div>
     );
   }

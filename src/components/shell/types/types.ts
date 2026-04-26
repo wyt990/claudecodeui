@@ -15,6 +15,9 @@ export type ShellInitMessage = {
   rows: number;
   initialCommand: string | null | undefined;
   isPlainShell: boolean;
+  /** P2 远程 */
+  targetKey?: string;
+  serverId?: number;
 };
 
 export type ShellResizeMessage = {

@@ -88,12 +88,19 @@
     "settingUpWorkspace": "Arbeitsbereich wird eingerichtet...",
     "chooseProject": "Projekt auswählen",
     "selectProjectDescription": "Wähl ein Projekt aus der Seitenleiste, um mit Claude zu programmieren. Jedes Projekt enthält deine Chat-Sitzungen und den Dateiverlauf.",
+    "emptyRemoteTitle": "No remote project list yet",
+    "emptyRemoteDescription": "Remote project discovery and sessions are on the roadmap. Use “This machine” in the Servers view to return to the local project list, or open Settings for appearance and API options that still work in remote mode.",
     "tip": "Tipp",
     "createProjectMobile": "Tipp oben auf die Menüschaltfläche, um auf Projekte zuzugreifen",
     "createProjectDesktop": "Erstell ein neues Projekt, indem du auf das Ordnersymbol in der Seitenleiste klickst",
     "newSession": "Neue Sitzung",
     "untitledSession": "Unbenannte Sitzung",
     "projectFiles": "Projektdateien"
+  },
+  "remoteTarget": {
+    "tabDisabled": "Not available in a remote workspace until that feature is wired to the SSH target (per §7.1).",
+    "mainWorkspaceTitle": "Remote workspace: {{name}}",
+    "mainWorkspaceBody": "A project on this list still refers to the host running CloudCLI. When remote sessions and file tools are implemented, the main view will use the SSH target you selected."
   },
   "fileTree": {
     "loading": "Dateien werden geladen...",

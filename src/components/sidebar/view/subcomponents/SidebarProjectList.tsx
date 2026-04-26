@@ -51,6 +51,11 @@ export type SidebarProjectListProps = {
   onCancelEditingSession: () => void;
   onSaveEditingSession: (projectName: string, sessionId: string, summary: string, provider: SessionProvider) => void;
   t: TFunction;
+  onOpenRemoteClaudeProject?: (project: Project) => void | Promise<void>;
+  remoteClaudeOpenBusyName?: string | null;
+  onOpenClaudeMdRemote?: (project: Project) => void;
+  isRemoteContext?: boolean;
+  onOpenRemoteProjectByPath?: () => void;
 };
 
 export default function SidebarProjectList({
@@ -90,6 +95,11 @@ export default function SidebarProjectList({
   onCancelEditingSession,
   onSaveEditingSession,
   t,
+  onOpenRemoteClaudeProject,
+  remoteClaudeOpenBusyName,
+  onOpenClaudeMdRemote,
+  isRemoteContext,
+  onOpenRemoteProjectByPath,
 }: SidebarProjectListProps) {
   const state = (
     <SidebarProjectsState
@@ -98,6 +108,8 @@ export default function SidebarProjectList({
       projectsCount={projects.length}
       filteredProjectsCount={filteredProjects.length}
       t={t}
+      isRemoteContext={isRemoteContext}
+      onOpenRemoteProjectByPath={onOpenRemoteProjectByPath}
     />
   );
 
@@ -152,6 +164,9 @@ export default function SidebarProjectList({
               onCancelEditingSession={onCancelEditingSession}
               onSaveEditingSession={onSaveEditingSession}
               t={t}
+              onOpenRemoteClaudeProject={onOpenRemoteClaudeProject}
+              remoteClaudeOpenBusyName={remoteClaudeOpenBusyName}
+              onOpenClaudeMdRemote={onOpenClaudeMdRemote}
             />
           ))}
     </div>

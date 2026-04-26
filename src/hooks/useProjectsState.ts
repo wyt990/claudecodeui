@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { NavigateFunction } from 'react-router-dom';
+import { useEnvironment } from '../contexts/EnvironmentContext';
 import { api } from '../utils/api';
 import type {
   AppSocketMessage,
@@ -155,6 +156,8 @@ export function useProjectsState({
   const [externalMessageUpdate, setExternalMessageUpdate] = useState(0);
 
   const loadingProgressTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const { targetKey } = useEnvironment();
+  const targetKeyHandledRef = useRef<string | null>(null);
 
   const fetchProjects = useCallback(async ({ showLoadingState = true }: FetchProjectsOptions = {}) => {
     try {
@@ -162,6 +165,18 @@ export function useProjectsState({
         setIsLoadingProjects(true);
       }
       const response = await api.projects();
+      if (response.status === 501) {
+        setProjects([]);
+        return;
+      }
+      if (!response.ok) {
+        try {
+          await response.json();
+        } catch {
+          // ignore
+        }
+        return;
+      }
       const projectData = (await response.json()) as Project[];
 
       setProjects((prevProjects) => {
@@ -192,9 +207,23 @@ export function useProjectsState({
     setShowSettings(true);
   }, []);
 
+  // 首次仅拉取；切换 currentTarget 时清理选中状态并回到本机根路由
   useEffect(() => {
+    if (targetKeyHandledRef.current === null) {
+      targetKeyHandledRef.current = targetKey;
+      void fetchProjects();
+      return;
+    }
+    if (targetKeyHandledRef.current === targetKey) {
+      return;
+    }
+    targetKeyHandledRef.current = targetKey;
+    setSelectedProject(null);
+    setSelectedSession(null);
+    setActiveTab('chat');
+    navigate('/', { replace: true });
     void fetchProjects();
-  }, [fetchProjects]);
+  }, [targetKey, fetchProjects, navigate]);
 
   // Auto-select the project when there is only one, so the user lands on the new session page
   useEffect(() => {

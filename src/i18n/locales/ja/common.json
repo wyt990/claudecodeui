@@ -88,12 +88,19 @@
     "settingUpWorkspace": "ワークスペースを準備しています...",
     "chooseProject": "プロジェクトを選択",
     "selectProjectDescription": "サイドバーからプロジェクトを選択して、Claudeとコーディングを始めましょう。各プロジェクトにはチャットセッションとファイル履歴が含まれています。",
+    "emptyRemoteTitle": "No remote project list yet",
+    "emptyRemoteDescription": "Remote project discovery and sessions are on the roadmap. Use “This machine” in the Servers view to return to the local project list, or open Settings for appearance and API options that still work in remote mode.",
     "tip": "ヒント",
     "createProjectMobile": "上部のメニューボタンからプロジェクトにアクセスできます",
     "createProjectDesktop": "サイドバーのフォルダアイコンをクリックして新しいプロジェクトを作成できます",
     "newSession": "新しいセッション",
     "untitledSession": "無題のセッション",
     "projectFiles": "プロジェクトファイル"
+  },
+  "remoteTarget": {
+    "tabDisabled": "Not available in a remote workspace until that feature is wired to the SSH target (per §7.1).",
+    "mainWorkspaceTitle": "Remote workspace: {{name}}",
+    "mainWorkspaceBody": "A project on this list still refers to the host running CloudCLI. When remote sessions and file tools are implemented, the main view will use the SSH target you selected."
   },
   "fileTree": {
     "loading": "ファイルを読み込んでいます...",

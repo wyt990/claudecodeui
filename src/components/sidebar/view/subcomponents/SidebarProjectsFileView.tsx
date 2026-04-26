@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import type { TFunction } from 'i18next';
-import { ChevronRight, Folder, Star } from 'lucide-react';
+import { ChevronRight, Folder, Loader2, PlayCircle, Star } from 'lucide-react';
 import type { LoadingProgress, Project } from '../../../../types/app';
 import { cn } from '../../../../lib/utils';
 import { Button, ScrollArea } from '../../../../shared/view/ui';
@@ -18,6 +18,10 @@ export type SidebarProjectsFileViewProps = {
   onToggleStarProject: (projectName: string) => void;
   onOpenProjectFile?: (path: string, options?: { preferEditorOnlyLayout?: boolean }) => void;
   t: TFunction;
+  isRemoteContext?: boolean;
+  onOpenRemoteProjectByPath?: () => void;
+  onOpenRemoteClaudeProject?: (project: Project) => void | Promise<void>;
+  remoteClaudeOpenBusyName?: string | null;
 };
 
 /** Which project row is expanded to show its file tree (at most one). */
@@ -32,6 +36,10 @@ export default function SidebarProjectsFileView({
   onToggleStarProject,
   onOpenProjectFile,
   t,
+  isRemoteContext = false,
+  onOpenRemoteProjectByPath,
+  onOpenRemoteClaudeProject,
+  remoteClaudeOpenBusyName,
 }: SidebarProjectsFileViewProps) {
   const [expandedForTree, setExpandedForTree] = useState<string | null>(() => selectedProject?.name ?? null);
 
@@ -60,6 +68,8 @@ export default function SidebarProjectsFileView({
       projectsCount={projects.length}
       filteredProjectsCount={filteredProjects.length}
       t={t}
+      isRemoteContext={isRemoteContext}
+      onOpenRemoteProjectByPath={onOpenRemoteProjectByPath}
     />
   );
 
@@ -76,6 +86,9 @@ export default function SidebarProjectsFileView({
               const treeOpen = expandedForTree === project.name;
               const isSelected = selectedProject?.name === project.name;
               const starred = isProjectStarred(project.name);
+              const isRemoteClaude = project.__cloudcliRemote === true;
+              const canOpenRemote = isRemoteClaude && typeof onOpenRemoteClaudeProject === 'function';
+              const remoteBusy = remoteClaudeOpenBusyName === project.name;
               return (
                 <div
                   key={project.name}
@@ -109,6 +122,26 @@ export default function SidebarProjectsFileView({
                       />
                       <span className="truncate text-xs font-medium text-foreground">{project.displayName || project.name}</span>
                     </button>
+                    {canOpenRemote && (
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="icon"
+                        className="h-7 w-7 flex-shrink-0 text-emerald-600 hover:bg-emerald-500/10 hover:text-emerald-700 dark:text-emerald-400"
+                        title={t('tooltips.openRemoteClaudeProject')}
+                        disabled={Boolean(remoteBusy)}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          void onOpenRemoteClaudeProject?.(project);
+                        }}
+                      >
+                        {remoteBusy ? (
+                          <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin" />
+                        ) : (
+                          <PlayCircle className="h-3.5 w-3.5" />
+                        )}
+                      </Button>
+                    )}
                     <Button
                       type="button"
                       variant="ghost"
