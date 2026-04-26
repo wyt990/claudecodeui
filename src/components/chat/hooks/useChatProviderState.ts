@@ -8,11 +8,16 @@ export type ClaudeModelPickerOption = { value: string; label: string };
 
 interface UseChatProviderStateArgs {
   selectedSession: ProjectSession | null;
+  /** SSH 远程工作区当前服务器 id；有值时从远端拉取 Claude 模型列表 */
+  remoteClaudeServerId?: number | null;
 }
 
 const PRESET_CLAUDE_MODEL_IDS = new Set(CLAUDE_MODELS.OPTIONS.map((o) => o.value));
 
-export function useChatProviderState({ selectedSession }: UseChatProviderStateArgs) {
+export function useChatProviderState({
+  selectedSession,
+  remoteClaudeServerId = null,
+}: UseChatProviderStateArgs) {
   const [permissionMode, setPermissionMode] = useState<PermissionMode>('default');
   const [pendingPermissionRequests, setPendingPermissionRequests] = useState<PendingPermissionRequest[]>([]);
   const [provider, setProvider] = useState<SessionProvider>(() => {
@@ -102,6 +107,29 @@ export function useChatProviderState({ selectedSession }: UseChatProviderStateAr
 
     (async () => {
       try {
+        if (
+          remoteClaudeServerId != null
+          && Number.isFinite(remoteClaudeServerId)
+          && remoteClaudeServerId >= 1
+        ) {
+          const r = await authenticatedFetch(
+            `/api/ssh-servers/${remoteClaudeServerId}/claude-list-models`,
+          );
+          const data = (await r.json()) as {
+            models?: { id: string; label?: string }[];
+            defaultModelId?: string | null;
+          };
+          const list = Array.isArray(data?.models) ? data.models : [];
+          if (!cancelled && list.length > 0) {
+            applyModelsFromRemote({ models: list, defaultModelId: data.defaultModelId });
+            return;
+          }
+          if (!cancelled) {
+            setClaudeModelOptions([...CLAUDE_MODELS.OPTIONS]);
+          }
+          return;
+        }
+
         const cfgRes = await authenticatedFetch('/api/cli/claude/sdk-config');
         const cfg = (await cfgRes.json()) as {
           dynamicModels?: boolean;
@@ -128,14 +156,14 @@ export function useChatProviderState({ selectedSession }: UseChatProviderStateAr
           }
         }
       } catch {
-        /* optional gateway / claudecode */
+        /* optional gateway / claudecode / ssh */
       }
     })();
 
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [remoteClaudeServerId]);
 
   useEffect(() => {
     if (provider !== 'cursor') {

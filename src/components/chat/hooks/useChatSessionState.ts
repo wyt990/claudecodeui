@@ -373,7 +373,12 @@ export function useChatSessionState({
 
     // Check session status
     if (ws) {
-      sendMessage({ type: 'check-session-status', sessionId: selectedSession.id, provider });
+      sendMessage({
+        type: 'check-session-status',
+        sessionId: selectedSession.id,
+        provider,
+        targetKey: getTargetKey(),
+      });
     }
 
     lastLoadedSessionKeyRef.current = sessionKey;

@@ -66,6 +66,11 @@ import sqlite3 from 'sqlite3';
 import { open } from 'sqlite';
 import os from 'os';
 import sessionManager from './sessionManager.js';
+import {
+  extractCwdFromClaudeJsonlEntry,
+  buildRemoteProjectRootStatProbeList,
+  harvestAbsolutePathStringsFromValue,
+} from './utils/claude-jsonl-cwd.js';
 
 // Import TaskMaster detection functions
 async function detectTaskMasterFolder(projectPath) {
@@ -294,6 +299,7 @@ async function extractProjectDirectory(projectName) {
       // Fall back to decoded project name if no sessions
       extractedPath = projectName.replace(/-/g, '/');
     } else {
+      const harvestedPaths = new Set();
       // Process all JSONL files to collect cwd values
       for (const file of jsonlFiles) {
         const jsonlFile = path.join(projectDir, file);
@@ -307,16 +313,22 @@ async function extractProjectDirectory(projectName) {
           if (line.trim()) {
             try {
               const entry = JSON.parse(line);
+              harvestAbsolutePathStringsFromValue(entry, harvestedPaths, 0);
 
-              if (entry.cwd) {
+              const cwd = extractCwdFromClaudeJsonlEntry(entry);
+              if (cwd) {
                 // Count occurrences of each cwd
-                cwdCounts.set(entry.cwd, (cwdCounts.get(entry.cwd) || 0) + 1);
+                cwdCounts.set(cwd, (cwdCounts.get(cwd) || 0) + 1);
 
                 // Track the most recent cwd
-                const timestamp = new Date(entry.timestamp || 0).getTime();
+                const timestamp = new Date(
+                  entry.timestamp ||
+                    (entry.snapshot && entry.snapshot.timestamp) ||
+                    0,
+                ).getTime();
                 if (timestamp > latestTimestamp) {
                   latestTimestamp = timestamp;
-                  latestCwd = entry.cwd;
+                  latestCwd = cwd;
                 }
               }
             } catch (parseError) {
@@ -328,8 +340,21 @@ async function extractProjectDirectory(projectName) {
 
       // Determine the best cwd to use
       if (cwdCounts.size === 0) {
-        // No cwd found, fall back to decoded project name
-        extractedPath = projectName.replace(/-/g, '/');
+        extractedPath = null;
+        const pdirPosix = projectDir.split(path.sep).join('/');
+        const candidates = buildRemoteProjectRootStatProbeList(null, pdirPosix, projectName, harvestedPaths);
+        for (const c of candidates) {
+          try {
+            await fs.access(c);
+            extractedPath = c;
+            break;
+          } catch {
+            /* try next candidate */
+          }
+        }
+        if (!extractedPath) {
+          extractedPath = projectName.replace(/-/g, '/');
+        }
       } else if (cwdCounts.size === 1) {
         // Only one cwd, use it
         extractedPath = Array.from(cwdCounts.keys())[0];

@@ -7,6 +7,7 @@ import { useWebSocket } from '../../contexts/WebSocketContext';
 import { useDeviceSettings } from '../../hooks/useDeviceSettings';
 import { useSessionProtection } from '../../hooks/useSessionProtection';
 import { useProjectsState } from '../../hooks/useProjectsState';
+import { getTargetKey } from '../../utils/targetKey.js';
 
 export default function AppContent() {
   const navigate = useNavigate();
@@ -117,7 +118,8 @@ export default function AppContent() {
     if (isConnected && selectedSession?.id) {
       sendMessage({
         type: 'get-pending-permissions',
-        sessionId: selectedSession.id
+        sessionId: selectedSession.id,
+        targetKey: getTargetKey(),
       });
     }
   }, [isConnected, selectedSession?.id, sendMessage]);

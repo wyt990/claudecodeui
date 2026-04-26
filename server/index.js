@@ -78,7 +78,26 @@ import { validateApiKey, authenticateToken, authenticateWebSocket } from './midd
 import { IS_PLATFORM } from './constants/config.js';
 import { getConnectableHost } from '../shared/networkHosts.js';
 import { parseTargetScope } from './utils/parse-target-scope.js';
-import { getRemoteClaudeProjectList, getRemoteClaudeSessionsForApi } from './remote/remote-claude-data.js';
+import {
+    getRemoteClaudeProjectList,
+    getRemoteClaudeSessionsForApi,
+    deleteRemoteClaudeSession,
+} from './remote/remote-claude-data.js';
+import {
+    resolveRemoteClaudeProjectRoot,
+    getRemoteProjectFileTree,
+    readRemoteFileBytes,
+    resolveRemoteReadablePath,
+    resolveRemoteDirectoryInProject,
+    resolvePathUnderRemoteProjectRoot,
+    writeRemoteUtf8File,
+    remoteCreateEntry,
+    remoteRenameWithinProject,
+    remoteMoveWithinProject,
+    remoteDeletePath,
+    remoteUploadFromLocalTemp,
+    remotePathMetadata,
+} from './services/remote-project-files.js';
 import {
     startRemoteShellPtyOnWebSocket,
     wireRemoteShellStreamToWebSocket,
@@ -532,6 +551,11 @@ app.get('/api/projects', authenticateToken, async (req, res) => {
             }
             try {
                 const projects = await getRemoteClaudeProjectList(req.user.id, scope.serverId);
+                for (const proj of projects) {
+                    if (proj && Array.isArray(proj.sessions) && proj.sessions.length > 0) {
+                        applyCustomSessionNames(req.user.id, proj.sessions, 'claude');
+                    }
+                }
                 console.log(
                     `[api/projects] remote ok userId=${req.user.id} serverId=${scope.serverId} count=${Array.isArray(projects) ? projects.length : 0}`,
                 );
@@ -574,6 +598,7 @@ app.get('/api/projects/:projectName/sessions', authenticateToken, async (req, re
                     parseInt(limit, 10) || 5,
                     parseInt(offset, 10) || 0,
                 );
+                applyCustomSessionNames(req.user.id, result.sessions, 'claude');
                 return res.json(result);
             } catch (e) {
                 if (e?.code === 'SSH_NO_SECRETS' || e?.code === 'SSH_DECRYPT_FAILED') {
@@ -607,6 +632,33 @@ app.delete('/api/projects/:projectName/sessions/:sessionId', authenticateToken, 
     try {
         const { projectName, sessionId } = req.params;
         console.log(`[API] Deleting session: ${sessionId} from project: ${projectName}`);
+        const scope = parseTargetScope(req);
+        if (scope.kind === 'invalid') {
+            return res.status(400).json({ error: scope.error, code: 'INVALID_TARGET' });
+        }
+        if (scope.kind === 'remote') {
+            if (!sshServersDb.getServer(req.user.id, scope.serverId)) {
+                return res.status(404).json({ error: 'SSH server not found' });
+            }
+            try {
+                await deleteRemoteClaudeSession(req.user.id, scope.serverId, projectName, sessionId);
+                sessionNamesDb.deleteName(req.user.id, sessionId, 'claude');
+                console.log(`[API] Remote session ${sessionId} deleted successfully`);
+                return res.json({ success: true });
+            } catch (e) {
+                if (e?.code === 'SSH_NO_SECRETS' || e?.code === 'SSH_DECRYPT_FAILED') {
+                    return res.status(400).json({ error: e.message, code: e.code });
+                }
+                if (e?.code === 'REMOTE_SESSION_NOT_FOUND' || e?.code === 'REMOTE_NO_SESSION_FILES') {
+                    return res.status(404).json({ error: e.message });
+                }
+                if (e?.code === 'REMOTE_SESSION_FILE_TOO_LARGE') {
+                    return res.status(413).json({ error: e.message });
+                }
+                console.error(`[API] Error deleting remote session ${req.params.sessionId}:`, e);
+                return res.status(500).json({ error: e.message || 'Failed to delete remote session' });
+            }
+        }
         await deleteSession(projectName, sessionId);
         sessionNamesDb.deleteName(req.user.id, sessionId, 'claude');
         console.log(`[API] Session ${sessionId} deleted successfully`);
@@ -861,6 +913,42 @@ app.get('/api/projects/:projectName/file', authenticateToken, async (req, res) =
             return res.status(400).json({ error: 'Invalid file path' });
         }
 
+        const scope = parseTargetScope(req);
+        if (scope.kind === 'invalid') {
+            return res.status(400).json({ error: scope.error, code: 'INVALID_TARGET' });
+        }
+        if (scope.kind === 'remote') {
+            if (!sshServersDb.getServer(req.user.id, scope.serverId)) {
+                return res.status(404).json({ error: 'SSH server not found' });
+            }
+            try {
+                const { resolved } = await resolveRemoteReadablePath(
+                    req.user.id,
+                    scope.serverId,
+                    projectName,
+                    String(filePath),
+                );
+                const buf = await readRemoteFileBytes(req.user.id, scope.serverId, resolved);
+                res.json({ content: buf.toString('utf8'), path: resolved });
+            } catch (e) {
+                if (e?.code === 'SSH_NO_SECRETS' || e?.code === 'SSH_DECRYPT_FAILED') {
+                    return res.status(400).json({ error: e.message, code: e.code });
+                }
+                if (e?.code === 'REMOTE_PROJECT_NOT_FOUND') {
+                    return res.status(404).json({ error: 'Project not found' });
+                }
+                if (e?.code === 'REMOTE_PATH_ESCAPE') {
+                    return res.status(403).json({ error: e.message });
+                }
+                if (e.code === 2 || e.code === 'ENOENT') {
+                    return res.status(404).json({ error: 'File not found' });
+                }
+                console.error('Error reading remote file (text):', e);
+                return res.status(500).json({ error: e.message });
+            }
+            return;
+        }
+
         const projectRoot = await extractProjectDirectory(projectName).catch(() => null);
         if (!projectRoot) {
             return res.status(404).json({ error: 'Project not found' });
@@ -899,6 +987,46 @@ app.get('/api/projects/:projectName/files/content', authenticateToken, async (re
         // Security: ensure the requested path is inside the project root
         if (!filePath) {
             return res.status(400).json({ error: 'Invalid file path' });
+        }
+
+        const scope = parseTargetScope(req);
+        if (scope.kind === 'invalid') {
+            return res.status(400).json({ error: scope.error, code: 'INVALID_TARGET' });
+        }
+        if (scope.kind === 'remote') {
+            if (!sshServersDb.getServer(req.user.id, scope.serverId)) {
+                return res.status(404).json({ error: 'SSH server not found' });
+            }
+            try {
+                const { resolved } = await resolveRemoteReadablePath(
+                    req.user.id,
+                    scope.serverId,
+                    projectName,
+                    String(filePath),
+                );
+                const buf = await readRemoteFileBytes(req.user.id, scope.serverId, resolved);
+                const mimeType = mime.lookup(resolved) || 'application/octet-stream';
+                res.setHeader('Content-Type', mimeType);
+                res.send(buf);
+            } catch (e) {
+                if (e?.code === 'SSH_NO_SECRETS' || e?.code === 'SSH_DECRYPT_FAILED') {
+                    return res.status(400).json({ error: e.message, code: e.code });
+                }
+                if (e?.code === 'REMOTE_PROJECT_NOT_FOUND') {
+                    return res.status(404).json({ error: 'Project not found' });
+                }
+                if (e?.code === 'REMOTE_PATH_ESCAPE') {
+                    return res.status(403).json({ error: e.message });
+                }
+                if (e.code === 2 || e.code === 'ENOENT') {
+                    return res.status(404).json({ error: 'File not found' });
+                }
+                console.error('Error reading remote file (binary):', e);
+                if (!res.headersSent) {
+                    return res.status(500).json({ error: e.message });
+                }
+            }
+            return;
         }
 
         const projectRoot = await extractProjectDirectory(projectName).catch(() => null);
@@ -962,6 +1090,37 @@ app.put('/api/projects/:projectName/file', authenticateToken, async (req, res) =
             return res.status(400).json({ error: 'Content is required' });
         }
 
+        const scope = parseTargetScope(req);
+        if (scope.kind === 'invalid') {
+            return res.status(400).json({ error: scope.error, code: 'INVALID_TARGET' });
+        }
+        if (scope.kind === 'remote') {
+            if (!sshServersDb.getServer(req.user.id, scope.serverId)) {
+                return res.status(404).json({ error: 'SSH server not found' });
+            }
+            try {
+                const { resolved } = await resolveRemoteReadablePath(
+                    req.user.id,
+                    scope.serverId,
+                    projectName,
+                    String(filePath),
+                );
+                await writeRemoteUtf8File(req.user.id, scope.serverId, resolved, content);
+                res.json({
+                    success: true,
+                    path: resolved,
+                    message: 'File saved successfully',
+                });
+            } catch (e) {
+                if (respondRemoteProjectFileError(res, e, { notFoundMsg: 'File or directory not found' })) {
+                    return;
+                }
+                console.error('Error saving remote file:', e);
+                res.status(500).json({ error: /** @type {any} */ (e).message });
+            }
+            return;
+        }
+
         const projectRoot = await extractProjectDirectory(projectName).catch(() => null);
         if (!projectRoot) {
             return res.status(404).json({ error: 'Project not found' });
@@ -1001,6 +1160,63 @@ app.get('/api/projects/:projectName/files', authenticateToken, async (req, res) 
 
         // Using fsPromises from import
 
+        const scope = parseTargetScope(req);
+        if (scope.kind === 'invalid') {
+            return res.status(400).json({ error: scope.error, code: 'INVALID_TARGET' });
+        }
+        if (scope.kind === 'remote') {
+            if (!sshServersDb.getServer(req.user.id, scope.serverId)) {
+                return res.status(404).json({ error: 'SSH server not found' });
+            }
+            let remoteResolvedRoot = null;
+            try {
+                remoteResolvedRoot = await resolveRemoteClaudeProjectRoot(
+                    req.user.id,
+                    scope.serverId,
+                    req.params.projectName,
+                );
+                if (!remoteResolvedRoot) {
+                    console.log('[api/projects/files remote] 404 project not resolved', {
+                        userId: req.user.id,
+                        serverId: scope.serverId,
+                        projectName: req.params.projectName,
+                    });
+                    return res.status(404).json({ error: `Project not found: ${req.params.projectName}` });
+                }
+                const files = await getRemoteProjectFileTree(
+                    req.user.id,
+                    scope.serverId,
+                    remoteResolvedRoot,
+                    10,
+                );
+                console.log(
+                    `[api/projects/.../files] remote ok userId=${req.user.id} serverId=${scope.serverId} project=${req.params.projectName} root=${remoteResolvedRoot} entries=${files.length}`,
+                );
+                return res.json(files);
+            } catch (e) {
+                if (e?.code === 'SSH_NO_SECRETS' || e?.code === 'SSH_DECRYPT_FAILED') {
+                    return res.status(400).json({ error: e.message, code: e.code });
+                }
+                if (e.code === 2 || e.code === 'ENOENT') {
+                    console.log('[api/projects/files remote] 404 path not on disk (SFTP)', {
+                        userId: req.user.id,
+                        serverId: scope.serverId,
+                        projectName: req.params.projectName,
+                        resolvedRoot: remoteResolvedRoot,
+                        errCode: e.code,
+                        errMessage: e.message,
+                        errno: e.errno,
+                    });
+                    return res.status(404).json({ error: `Project path not found on remote: ${req.params.projectName}` });
+                }
+                console.error(
+                    `[api/projects/.../files] remote fail userId=${req.user.id} serverId=${scope.serverId}:`,
+                    e && e.stack ? e.stack : e,
+                );
+                return res.status(500).json({ error: e.message || 'Failed to list remote files' });
+            }
+        }
+
         // Use extractProjectDirectory to get the actual project path
         let actualPath;
         try {
@@ -1029,6 +1245,54 @@ app.get('/api/projects/:projectName/files', authenticateToken, async (req, res) 
 // ============================================================================
 // FILE OPERATIONS API ENDPOINTS
 // ============================================================================
+
+/**
+ * @param {import('express').Response} res
+ * @param {unknown} e
+ * @param {{ notFoundMsg?: string, conflictMsg?: string }} [opts]
+ * @returns {boolean} true if response was sent
+ */
+function respondRemoteProjectFileError(res, e, opts = {}) {
+    const { notFoundMsg = 'Not found', conflictMsg } = opts;
+    const err = /** @type {any} */ (e);
+    if (err?.code === 'SSH_NO_SECRETS' || err?.code === 'SSH_DECRYPT_FAILED') {
+        res.status(400).json({ error: err.message, code: err.code });
+        return true;
+    }
+    if (err?.code === 'REMOTE_PROJECT_NOT_FOUND') {
+        res.status(404).json({ error: 'Project not found' });
+        return true;
+    }
+    if (err?.code === 'REMOTE_PATH_ESCAPE' || err?.code === 'REMOTE_INVALID_PATH') {
+        res.status(403).json({ error: err.message });
+        return true;
+    }
+    if (err?.code === 'REMOTE_DELETE_ROOT' || err?.code === 'REMOTE_MOVE_ROOT') {
+        res.status(403).json({ error: err.message });
+        return true;
+    }
+    if (err?.code === 'REMOTE_MOVE_INTO_SELF') {
+        res.status(400).json({ error: err.message });
+        return true;
+    }
+    if (err?.code === 'ENOTDIR') {
+        res.status(400).json({ error: err.message });
+        return true;
+    }
+    if (err?.code === 'EEXIST') {
+        res.status(409).json({ error: conflictMsg || err.message || 'Already exists' });
+        return true;
+    }
+    if (err.code === 2 || err.code === 'ENOENT') {
+        res.status(404).json({ error: notFoundMsg });
+        return true;
+    }
+    if (err.code === 3) {
+        res.status(403).json({ error: 'Permission denied' });
+        return true;
+    }
+    return false;
+}
 
 /**
  * Validate that a path is within the project root
@@ -1091,6 +1355,64 @@ app.post('/api/projects/:projectName/files/create', authenticateToken, async (re
         const nameValidation = validateFilename(name);
         if (!nameValidation.valid) {
             return res.status(400).json({ error: nameValidation.error });
+        }
+
+        const scope = parseTargetScope(req);
+        if (scope.kind === 'invalid') {
+            return res.status(400).json({ error: scope.error, code: 'INVALID_TARGET' });
+        }
+        if (scope.kind === 'remote') {
+            if (!sshServersDb.getServer(req.user.id, scope.serverId)) {
+                return res.status(404).json({ error: 'SSH server not found' });
+            }
+            try {
+                const projectRoot = await resolveRemoteClaudeProjectRoot(
+                    req.user.id,
+                    scope.serverId,
+                    projectName,
+                );
+                if (!projectRoot) {
+                    return res.status(404).json({ error: 'Project not found' });
+                }
+                const targetDir = parentPath || '';
+                let resolvedPath;
+                if (!targetDir || targetDir === '.' || targetDir === './') {
+                    resolvedPath = resolvePathUnderRemoteProjectRoot(projectRoot, name);
+                } else {
+                    const parentRes = resolveRemoteDirectoryInProject(projectRoot, targetDir);
+                    if (!parentRes) {
+                        return res.status(403).json({ error: 'Path must be under project root' });
+                    }
+                    resolvedPath = path.posix.join(parentRes, name);
+                }
+                if (!resolvedPath || !resolvePathUnderRemoteProjectRoot(projectRoot, resolvedPath)) {
+                    return res.status(403).json({ error: 'Path must be under project root' });
+                }
+                await remoteCreateEntry(
+                    req.user.id,
+                    scope.serverId,
+                    projectRoot,
+                    resolvedPath,
+                    type,
+                );
+                res.json({
+                    success: true,
+                    path: resolvedPath,
+                    name,
+                    type,
+                    message: `${type === 'file' ? 'File' : 'Directory'} created successfully`,
+                });
+            } catch (e) {
+                if (respondRemoteProjectFileError(res, e, {
+                    notFoundMsg: 'Parent directory not found',
+                    conflictMsg: `${type === 'file' ? 'File' : 'Directory'} already exists`,
+                })) {
+                    return;
+                }
+                console.error('Error creating remote file/directory:', e);
+                res.status(500).json({ error: /** @type {any} */ (e).message });
+            }
+            return;
         }
 
         // Get project root
@@ -1164,6 +1486,58 @@ app.put('/api/projects/:projectName/files/rename', authenticateToken, async (req
         const nameValidation = validateFilename(newName);
         if (!nameValidation.valid) {
             return res.status(400).json({ error: nameValidation.error });
+        }
+
+        const scope = parseTargetScope(req);
+        if (scope.kind === 'invalid') {
+            return res.status(400).json({ error: scope.error, code: 'INVALID_TARGET' });
+        }
+        if (scope.kind === 'remote') {
+            if (!sshServersDb.getServer(req.user.id, scope.serverId)) {
+                return res.status(404).json({ error: 'SSH server not found' });
+            }
+            try {
+                const projectRoot = await resolveRemoteClaudeProjectRoot(
+                    req.user.id,
+                    scope.serverId,
+                    projectName,
+                );
+                if (!projectRoot) {
+                    return res.status(404).json({ error: 'Project not found' });
+                }
+                const resolvedOldPath = resolvePathUnderRemoteProjectRoot(projectRoot, oldPath);
+                if (!resolvedOldPath) {
+                    return res.status(403).json({ error: 'Path must be under project root' });
+                }
+                const resolvedNewPath = path.posix.join(path.posix.dirname(resolvedOldPath), newName);
+                if (!resolvePathUnderRemoteProjectRoot(projectRoot, resolvedNewPath)) {
+                    return res.status(403).json({ error: 'Path must be under project root' });
+                }
+                await remoteRenameWithinProject(
+                    req.user.id,
+                    scope.serverId,
+                    projectRoot,
+                    resolvedOldPath,
+                    resolvedNewPath,
+                );
+                res.json({
+                    success: true,
+                    oldPath: resolvedOldPath,
+                    newPath: resolvedNewPath,
+                    newName,
+                    message: 'Renamed successfully',
+                });
+            } catch (e) {
+                if (respondRemoteProjectFileError(res, e, {
+                    notFoundMsg: 'File or directory not found',
+                    conflictMsg: 'A file or directory with this name already exists',
+                })) {
+                    return;
+                }
+                console.error('Error renaming remote file/directory:', e);
+                res.status(500).json({ error: /** @type {any} */ (e).message });
+            }
+            return;
         }
 
         // Get project root
@@ -1242,6 +1616,62 @@ app.put('/api/projects/:projectName/files/move', authenticateToken, async (req, 
 
         // "" or "." means project root (same as create/upload parentPath)
         const toDirForValidation = toDirectoryPath === '' || toDirectoryPath === '.' ? '' : toDirectoryPath;
+
+        const scope = parseTargetScope(req);
+        if (scope.kind === 'invalid') {
+            return res.status(400).json({ error: scope.error, code: 'INVALID_TARGET' });
+        }
+        if (scope.kind === 'remote') {
+            if (!sshServersDb.getServer(req.user.id, scope.serverId)) {
+                return res.status(404).json({ error: 'SSH server not found' });
+            }
+            try {
+                const projectRoot = await resolveRemoteClaudeProjectRoot(
+                    req.user.id,
+                    scope.serverId,
+                    projectName,
+                );
+                if (!projectRoot) {
+                    return res.status(404).json({ error: 'Project not found' });
+                }
+                const resolvedFrom = resolvePathUnderRemoteProjectRoot(projectRoot, fromPath);
+                if (!resolvedFrom) {
+                    return res.status(403).json({ error: 'Path must be under project root' });
+                }
+                const resolvedDir = resolveRemoteDirectoryInProject(projectRoot, toDirForValidation);
+                if (!resolvedDir) {
+                    return res.status(403).json({ error: 'Path must be under project root' });
+                }
+                const baseName = path.posix.basename(resolvedFrom);
+                const resolvedNewPath = path.posix.join(resolvedDir, baseName);
+                if (!resolvePathUnderRemoteProjectRoot(projectRoot, resolvedNewPath)) {
+                    return res.status(403).json({ error: 'Path must be under project root' });
+                }
+                await remoteMoveWithinProject(
+                    req.user.id,
+                    scope.serverId,
+                    projectRoot,
+                    resolvedFrom,
+                    resolvedNewPath,
+                );
+                res.json({
+                    success: true,
+                    oldPath: resolvedFrom,
+                    newPath: resolvedNewPath,
+                    message: 'Moved successfully',
+                });
+            } catch (e) {
+                if (respondRemoteProjectFileError(res, e, {
+                    notFoundMsg: 'File or directory not found',
+                    conflictMsg: 'A file or folder with this name already exists in the destination',
+                })) {
+                    return;
+                }
+                console.error('Error moving remote file/directory:', e);
+                res.status(500).json({ error: /** @type {any} */ (e).message });
+            }
+            return;
+        }
 
         const projectRoot = await extractProjectDirectory(projectName).catch(() => null);
         if (!projectRoot) {
@@ -1333,11 +1763,58 @@ app.put('/api/projects/:projectName/files/move', authenticateToken, async (req, 
 app.delete('/api/projects/:projectName/files', authenticateToken, async (req, res) => {
     try {
         const { projectName } = req.params;
-        const { path: targetPath, type } = req.body;
+        const { path: targetPath } = req.body;
 
         // Validate input
         if (!targetPath) {
             return res.status(400).json({ error: 'Path is required' });
+        }
+
+        const scope = parseTargetScope(req);
+        if (scope.kind === 'invalid') {
+            return res.status(400).json({ error: scope.error, code: 'INVALID_TARGET' });
+        }
+        if (scope.kind === 'remote') {
+            if (!sshServersDb.getServer(req.user.id, scope.serverId)) {
+                return res.status(404).json({ error: 'SSH server not found' });
+            }
+            try {
+                const projectRoot = await resolveRemoteClaudeProjectRoot(
+                    req.user.id,
+                    scope.serverId,
+                    projectName,
+                );
+                if (!projectRoot) {
+                    return res.status(404).json({ error: 'Project not found' });
+                }
+                const resolvedPath = resolvePathUnderRemoteProjectRoot(projectRoot, targetPath);
+                if (!resolvedPath) {
+                    return res.status(403).json({ error: 'Path must be under project root' });
+                }
+                const normRoot = projectRoot === '/' ? '/' : projectRoot.replace(/\/+$/, '');
+                const normTarget = resolvedPath.replace(/\/+$/, '') || '/';
+                if (normTarget === normRoot) {
+                    return res.status(403).json({ error: 'Cannot delete project root directory' });
+                }
+                const meta = await remotePathMetadata(req.user.id, scope.serverId, resolvedPath);
+                if (!meta.exists) {
+                    return res.status(404).json({ error: 'File or directory not found' });
+                }
+                await remoteDeletePath(req.user.id, scope.serverId, projectRoot, resolvedPath);
+                res.json({
+                    success: true,
+                    path: resolvedPath,
+                    type: meta.isDirectory ? 'directory' : 'file',
+                    message: 'Deleted successfully',
+                });
+            } catch (e) {
+                if (respondRemoteProjectFileError(res, e, { notFoundMsg: 'File or directory not found' })) {
+                    return;
+                }
+                console.error('Error deleting remote file/directory:', e);
+                res.status(500).json({ error: /** @type {any} */ (e).message });
+            }
+            return;
         }
 
         // Get project root
@@ -1456,6 +1933,76 @@ const uploadFilesHandler = async (req, res) => {
 
             if (!req.files || req.files.length === 0) {
                 return res.status(400).json({ error: 'No files provided' });
+            }
+
+            const scope = parseTargetScope(req);
+            if (scope.kind === 'invalid') {
+                return res.status(400).json({ error: scope.error, code: 'INVALID_TARGET' });
+            }
+            if (scope.kind === 'remote') {
+                const cleanupTemps = async () => {
+                    if (req.files) {
+                        for (const f of req.files) {
+                            await fsPromises.unlink(f.path).catch(() => {});
+                        }
+                    }
+                };
+                if (!sshServersDb.getServer(req.user.id, scope.serverId)) {
+                    await cleanupTemps();
+                    return res.status(404).json({ error: 'SSH server not found' });
+                }
+                try {
+                    const projectRoot = await resolveRemoteClaudeProjectRoot(
+                        req.user.id,
+                        scope.serverId,
+                        projectName,
+                    );
+                    if (!projectRoot) {
+                        await cleanupTemps();
+                        return res.status(404).json({ error: 'Project not found' });
+                    }
+                    const targetDir = targetPath || '';
+                    let resolvedTargetDir;
+                    if (!targetDir || targetDir === '.' || targetDir === './') {
+                        resolvedTargetDir = projectRoot;
+                    } else {
+                        resolvedTargetDir = resolveRemoteDirectoryInProject(projectRoot, targetDir);
+                        if (!resolvedTargetDir) {
+                            await cleanupTemps();
+                            return res.status(403).json({ error: 'Path must be under project root' });
+                        }
+                    }
+                    const items = req.files.map((file, i) => ({
+                        localTempPath: file.path,
+                        destRelativePosix: (filePaths && filePaths[i]) ? filePaths[i] : file.originalname,
+                    }));
+                    const uploadedFiles = await remoteUploadFromLocalTemp(
+                        req.user.id,
+                        scope.serverId,
+                        projectRoot,
+                        resolvedTargetDir,
+                        items,
+                    );
+                    await cleanupTemps();
+                    return res.json({
+                        success: true,
+                        files: uploadedFiles.map((u) => ({
+                            name: u.name,
+                            path: u.path,
+                            size: u.size,
+                            mimeType: mime.lookup(u.path) || 'application/octet-stream',
+                        })),
+                        targetPath: resolvedTargetDir,
+                        message: `Uploaded ${uploadedFiles.length} file(s) successfully`,
+                    });
+                } catch (e) {
+                    await cleanupTemps();
+                    if (respondRemoteProjectFileError(res, e)) {
+                        return;
+                    }
+                    console.error('Error uploading remote files:', e);
+                    return res.status(500).json({ error: /** @type {any} */ (e).message });
+                }
             }
 
             // Get project root
@@ -1657,6 +2204,15 @@ class WebSocketWriter {
     }
 }
 
+/** @param {any} data */
+function clientReplyTargetKey(data) {
+    const tk = data && data.targetKey;
+    if (tk != null && String(tk).trim() !== '') {
+        return String(tk).trim();
+    }
+    return 'local';
+}
+
 // Handle chat WebSocket connections
 function handleChatConnection(ws, request) {
     console.log('[INFO] Chat WebSocket connected');
@@ -1667,9 +2223,21 @@ function handleChatConnection(ws, request) {
     // Wrap WebSocket with writer for consistent interface with SSEStreamWriter
     const writer = new WebSocketWriter(ws, request?.user?.id ?? request?.user?.userId ?? null);
 
+    const wsPingMs = Math.max(10_000, Number(process.env.CLOUDCLI_WS_PING_INTERVAL_MS || 25_000) || 25_000);
+    const pingTimer = setInterval(() => {
+        if (ws.readyState === WebSocket.OPEN) {
+            try {
+                ws.ping();
+            } catch {
+                /* */
+            }
+        }
+    }, wsPingMs);
+
     ws.on('message', async (message) => {
+        let data = null;
         try {
-            const data = JSON.parse(message);
+            data = JSON.parse(message);
 
             if (data.type === 'claude-command' && data.options?.useRemoteSsh) {
                 const userId = request?.user?.userId ?? request?.user?.id;
@@ -1772,7 +2340,7 @@ function handleChatConnection(ws, request) {
 
                 writer.send({
                     type: 'session-status',
-                    targetKey: 'local',
+                    targetKey: clientReplyTargetKey(data),
                     sessionId,
                     provider,
                     isProcessing: isActive
@@ -1784,7 +2352,7 @@ function handleChatConnection(ws, request) {
                     const pending = getPendingApprovalsForSession(sessionId);
                     writer.send({
                         type: 'pending-permissions-response',
-                        targetKey: 'local',
+                        targetKey: clientReplyTargetKey(data),
                         sessionId,
                         data: pending
                     });
@@ -1799,7 +2367,7 @@ function handleChatConnection(ws, request) {
                 };
                 writer.send({
                     type: 'active-sessions',
-                    targetKey: 'local',
+                    targetKey: clientReplyTargetKey(data),
                     sessions: activeSessions
                 });
             }
@@ -1807,13 +2375,14 @@ function handleChatConnection(ws, request) {
             console.error('[ERROR] Chat WebSocket error:', error.message);
             writer.send({
                 type: 'error',
-                targetKey: 'local',
+                targetKey: clientReplyTargetKey(data),
                 error: error.message
             });
         }
     });
 
     ws.on('close', () => {
+        clearInterval(pingTimer);
         console.log('🔌 Chat client disconnected');
         // Remove from connected clients
         connectedClients.delete(ws);

@@ -46,7 +46,7 @@ function ChatInterface({
   const { tasksEnabled, isTaskMasterInstalled } = useTasksSettings();
   const { t } = useTranslation('chat');
 
-  const { targetKey, isRemote } = useEnvironment();
+  const { targetKey, isRemote, currentTarget } = useEnvironment();
   const sessionStore = useSessionStore();
   const { clearEntireStore } = sessionStore;
 
@@ -95,6 +95,8 @@ function ChatInterface({
     cyclePermissionMode,
   } = useChatProviderState({
     selectedSession,
+    remoteClaudeServerId:
+      isRemote && currentTarget.kind === 'remote' ? currentTarget.serverId : null,
   });
 
   const {
@@ -143,6 +145,17 @@ function ChatInterface({
     pendingViewSessionRef,
     sessionStore,
   });
+
+  useEffect(() => {
+    if (!isRemote) {
+      return;
+    }
+    if (selectedSession || currentSessionId || !selectedProject) {
+      return;
+    }
+    setProvider('claude');
+    localStorage.setItem('selected-provider', 'claude');
+  }, [isRemote, selectedSession, currentSessionId, selectedProject, setProvider]);
 
   const {
     input,

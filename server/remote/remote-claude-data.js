@@ -7,9 +7,151 @@ import readline from 'readline';
 import path from 'path';
 import { withRemoteSsh } from './remote-ssh.js';
 import { normalizeClaudeJsonlToApi } from '../providers/claude/adapter.js';
+import {
+  extractCwdFromClaudeJsonlEntry,
+  buildRemoteProjectRootStatProbeList,
+  harvestAbsolutePathStringsFromValue,
+} from '../utils/claude-jsonl-cwd.js';
 
 const MAX_FILE_BYTES = 8 * 1024 * 1024;
 const CLAUDE_PROJECTS_REL = path.posix.join('.claude', 'projects');
+
+/**
+ * 与本地 `extractProjectDirectory` 一致：遍历目录下所有非 agent 的 .jsonl，聚合 `cwd`。
+ * 仅用「首个 jsonl 前几行」会漏掉 cwd 或选错文件，回退到 `replace(/-/g,'/')` 会把 `AI-NovelGenerator` 拆错。
+ *
+ * @param {import('ssh2').SFTPWrapper} sftp
+ * @param {string} pdir 远端 ~/.claude/projects/{projectName} 绝对路径
+ * @param {string} projectName 该段目录名（编码名）
+ * @returns {Promise<string | null>} 推断的工作区绝对路径；目录不可读时 null
+ */
+function logInferCwd(msg, extra = {}) {
+  const tail = Object.keys(extra).length ? ` ${JSON.stringify(extra)}` : '';
+  console.log(`[remote-claude-data inferCwd] ${msg}${tail}`);
+}
+
+export async function inferRemoteProjectCwdFromClaudeProjectDir(sftp, pdir, projectName) {
+  const lossyFallback = String(projectName).replace(/-/g, '/');
+
+  const files = await new Promise((resolve, reject) => {
+    sftp.readdir(pdir, (e, list) => {
+      if (e) {
+        if (e.code === 2) {
+          resolve(null);
+          return;
+        }
+        reject(e);
+        return;
+      }
+      resolve(list || []);
+    });
+  });
+  if (!files) {
+    logInferCwd('readdir pdir failed or empty (ENOENT)', { pdir, projectName });
+    return null;
+  }
+
+  const jsonlFiles = files
+    .map((f) => f.filename)
+    .filter((fn) => fn && fn.endsWith('.jsonl') && !fn.startsWith('agent-'));
+
+  logInferCwd('scan start', {
+    pdir,
+    projectName,
+    lossyFallback,
+    jsonlCount: jsonlFiles.length,
+    jsonlSample: jsonlFiles.slice(0, 12),
+  });
+
+  if (jsonlFiles.length === 0) {
+    logInferCwd('no jsonl → lossyFallback', { lossyFallback });
+    return lossyFallback;
+  }
+
+  const cwdCounts = new Map();
+  let latestTimestamp = 0;
+  let latestCwd = /** @type {string | null} */ (null);
+  /** @type {string[]} */
+  const sampleKeysNoCwd = [];
+  /** @type {Set<string>} */
+  const harvestedPaths = new Set();
+
+  for (const file of jsonlFiles) {
+    const fpath = path.posix.join(pdir, file);
+    await readSftpFileLines(sftp, fpath, (line) => {
+      if (!line.trim()) {
+        return true;
+      }
+      try {
+        const entry = JSON.parse(line);
+        harvestAbsolutePathStringsFromValue(entry, harvestedPaths, 0);
+        const cwd = extractCwdFromClaudeJsonlEntry(entry);
+        if (cwd) {
+          cwdCounts.set(cwd, (cwdCounts.get(cwd) || 0) + 1);
+          const ts = new Date(
+            (entry && entry.timestamp) ||
+              (entry && entry.snapshot && /** @type {any} */ (entry.snapshot).timestamp) ||
+              0,
+          ).getTime();
+          if (ts > latestTimestamp) {
+            latestTimestamp = ts;
+            latestCwd = cwd;
+          }
+        } else if (sampleKeysNoCwd.length < 5 && entry && typeof entry === 'object') {
+          const keys = Object.keys(entry).slice(0, 24);
+          sampleKeysNoCwd.push(`${file}:${keys.join(',')}`);
+        }
+      } catch {
+        /* skip malformed */
+      }
+      return true;
+    });
+  }
+
+  const cwdSummary = Object.fromEntries(cwdCounts);
+
+  if (cwdCounts.size === 0) {
+    const candidates = buildRemoteProjectRootStatProbeList(null, pdir, projectName, harvestedPaths);
+    logInferCwd('no cwd in jsonl → probe stat candidates', {
+      sampleLinesTopKeys: sampleKeysNoCwd,
+      candidateCount: candidates.length,
+      harvestCount: harvestedPaths.size,
+      harvestSample: Array.from(harvestedPaths).slice(0, 8),
+      firstCandidates: candidates.slice(0, 16),
+    });
+    for (const c of candidates) {
+      try {
+        await sftpFileStat(sftp, c);
+        logInferCwd('stat hit', { chosen: c });
+        return c;
+      } catch {
+        /* try next */
+      }
+    }
+    logInferCwd('stat miss → lossyFallback', { lossyFallback });
+    return lossyFallback;
+  }
+  if (cwdCounts.size === 1) {
+    const only = Array.from(cwdCounts.keys())[0];
+    logInferCwd('single cwd', { chosen: only, cwdSummary });
+    return only;
+  }
+  const mostRecentCount = cwdCounts.get(latestCwd || '') || 0;
+  const maxCount = Math.max(...cwdCounts.values());
+  if (latestCwd && mostRecentCount >= maxCount * 0.25) {
+    logInferCwd('multi cwd → latestCwd', { chosen: latestCwd, latestTimestamp, cwdSummary });
+    return latestCwd;
+  }
+  for (const [cwd, count] of cwdCounts.entries()) {
+    if (count === maxCount) {
+      logInferCwd('multi cwd → max count', { chosen: cwd, cwdSummary });
+      return cwd;
+    }
+  }
+  const last = latestCwd || lossyFallback;
+  logInferCwd('multi cwd → fallback', { chosen: last, cwdSummary });
+  return last;
+}
 
 /**
  * @param {import('ssh2').SFTPWrapper} sftp
@@ -136,43 +278,14 @@ export async function getRemoteClaudeProjectList(userId, serverId) {
         continue;
       }
       const pdir = path.posix.join(projectsRoot, name);
-      // 推断 cwd
-      const jsonl = await new Promise((resolve) => {
-        sftp.readdir(pdir, (e, files) => {
-          if (e) {
-            resolve(null);
-            return;
-          }
-          const j = (files || []).find(
-            (f) => f.filename && f.filename.endsWith('.jsonl') && !f.filename.startsWith('agent-'),
-          );
-          resolve(j ? j.filename : null);
-        });
-      });
       let projectPath = name.split('-').join('/');
-      if (jsonl) {
-        const fpath = path.posix.join(pdir, jsonl);
-        const lines = await readSftpFileLines(sftp, fpath, (line, idx) => {
-          if (idx > 2) {
-            return false;
-          }
-          if (!line.trim()) {
-            return true;
-          }
-          try {
-            const ent = JSON.parse(line);
-            if (ent && typeof ent.cwd === 'string' && ent.cwd) {
-              projectPath = ent.cwd;
-              return false;
-            }
-          } catch {
-            return true;
-          }
-          return true;
-        });
-        if (!lines) {
-          /* */ void lines;
+      try {
+        const inferred = await inferRemoteProjectCwdFromClaudeProjectDir(sftp, pdir, name);
+        if (inferred != null && String(inferred).trim() !== '') {
+          projectPath = inferred;
         }
+      } catch {
+        /* keep split fallback */
       }
 
       const displayName = projectPath.split('/').filter(Boolean).pop() || name;
@@ -420,4 +533,105 @@ export async function getRemoteClaudeSessionsForApi(userId, serverId, projectNam
   return withRemoteSsh(userId, serverId, async ({ sftp, home }) =>
     getRemoteClaudeSessionsInternal(sftp, home, projectName, limit, offset),
   );
+}
+
+/**
+ * 从远端 ~/.claude/projects/{projectName}/*.jsonl 中移除指定 session 的所有行（与 projects.js deleteSession 行为一致）。
+ * @param {number} userId
+ * @param {number} serverId
+ * @param {string} projectName
+ * @param {string} sessionId
+ * @returns {Promise<boolean>}
+ */
+export async function deleteRemoteClaudeSession(userId, serverId, projectName, sessionId) {
+  const sid = String(sessionId);
+  console.log(
+    `[remote-claude-data] deleteRemoteClaudeSession userId=${userId} serverId=${serverId} project=${projectName} sessionId=${sid}`,
+  );
+  return withRemoteSsh(userId, serverId, async ({ sftp, home }) => {
+    const pdir = path.posix.join(home, CLAUDE_PROJECTS_REL, projectName);
+    const fileList = await new Promise((resolve, reject) => {
+      sftp.readdir(pdir, (e, list) => {
+        if (e) {
+          if (e.code === 2) {
+            resolve([]);
+            return;
+          }
+          reject(e);
+          return;
+        }
+        resolve(list || []);
+      });
+    });
+    const jsonlFiles = fileList
+      .filter(
+        (f) =>
+          f.filename
+          && f.filename.endsWith('.jsonl')
+          && !f.filename.startsWith('agent-'),
+      )
+      .map((f) => f.filename);
+
+    if (jsonlFiles.length === 0) {
+      const err = new Error('No session files found for this project');
+      /** @type {any} */ (err).code = 'REMOTE_NO_SESSION_FILES';
+      throw err;
+    }
+
+    for (const file of jsonlFiles) {
+      const jsonlFile = path.posix.join(pdir, file);
+      const buf = await new Promise((resolve, reject) => {
+        sftp.readFile(jsonlFile, (e, b) => {
+          if (e) {
+            reject(e);
+            return;
+          }
+          resolve(b);
+        });
+      });
+      if (!Buffer.isBuffer(buf) || !buf.length) {
+        continue;
+      }
+      if (buf.length > MAX_FILE_BYTES) {
+        const err = new Error('Session file too large to modify');
+        /** @type {any} */ (err).code = 'REMOTE_SESSION_FILE_TOO_LARGE';
+        throw err;
+      }
+      const content = buf.toString('utf8');
+      const lines = content.split('\n').filter((line) => line.trim());
+
+      const hasSession = lines.some((line) => {
+        try {
+          const data = JSON.parse(line);
+          return data.sessionId === sid;
+        } catch {
+          return false;
+        }
+      });
+
+      if (!hasSession) {
+        continue;
+      }
+
+      const filteredLines = lines.filter((line) => {
+        try {
+          const data = JSON.parse(line);
+          return data.sessionId !== sid;
+        } catch {
+          return true;
+        }
+      });
+
+      const out = filteredLines.join('\n') + (filteredLines.length > 0 ? '\n' : '');
+      await new Promise((resolve, reject) => {
+        sftp.writeFile(jsonlFile, Buffer.from(out, 'utf8'), (e) => (e ? reject(e) : resolve()));
+      });
+      console.log(`[remote-claude-data] deleteRemoteClaudeSession wrote file=${JSON.stringify(file)}`);
+      return true;
+    }
+
+    const err = new Error(`Session ${sid} not found in any files`);
+    /** @type {any} */ (err).code = 'REMOTE_SESSION_NOT_FOUND';
+    throw err;
+  });
 }
