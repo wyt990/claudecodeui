@@ -10,7 +10,7 @@ type MainContentTabSwitcherProps = {
   activeTab: AppTab;
   setActiveTab: Dispatch<SetStateAction<AppTab>>;
   shouldShowTasksTab: boolean;
-  /** 远程环境下禁用除「聊天」外的本机主区 Tab（插件/文件/终端/Git/任务等，见方案 §7.1） */
+  /** 远程工作区：仅开放已对 SSH 接线的 Tab；其余灰显 */
   isRemoteTarget: boolean;
 };
 
@@ -45,14 +45,30 @@ const TASKS_TAB: BuiltInTab = {
   icon: ClipboardCheck,
 };
 
+/** 远程下已接 API/WebSocket 的 Tab；其余（Git/任务/插件等）仍走本机逻辑，暂灰显 */
+const REMOTE_WORKSPACE_ALLOWED_TAB_IDS = new Set<AppTab>(['chat', 'preview', 'shell', 'files']);
+
 function isTabBlockedByRemoteMode(tab: TabDefinition, isRemoteTarget: boolean): boolean {
   if (!isRemoteTarget) {
     return false;
   }
-  if (tab.id === 'chat' || tab.id === 'preview') {
-    return false;
+  if (tab.kind === 'plugin') {
+    return true;
   }
-  return true;
+  return !REMOTE_WORKSPACE_ALLOWED_TAB_IDS.has(tab.id);
+}
+
+function remoteTabBlockedTipKey(tab: TabDefinition): string {
+  if (tab.kind === 'plugin') {
+    return 'remoteTarget.tabBlockedPlugin';
+  }
+  if (tab.id === 'git') {
+    return 'remoteTarget.tabBlockedGit';
+  }
+  if (tab.id === 'tasks') {
+    return 'remoteTarget.tabBlockedTasks';
+  }
+  return 'remoteTarget.tabDisabled';
 }
 
 export default function MainContentTabSwitcher({
@@ -84,7 +100,7 @@ export default function MainContentTabSwitcher({
         const isActive = tab.id === activeTab;
         const displayLabel = tab.kind === 'builtin' ? t(tab.labelKey) : tab.label;
         const blocked = isTabBlockedByRemoteMode(tab, isRemoteTarget);
-        const tip = blocked ? `${displayLabel} — ${t('remoteTarget.tabDisabled')}` : displayLabel;
+        const tip = blocked ? `${displayLabel} — ${t(remoteTabBlockedTipKey(tab))}` : displayLabel;
 
         return (
           <Tooltip key={tab.id} content={tip} position="bottom">

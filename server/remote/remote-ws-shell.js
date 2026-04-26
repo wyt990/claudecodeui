@@ -5,7 +5,12 @@
 
 import { acquirePooledSshClient, takeExecSlot, releaseExecSlot } from './remote-ssh-pool.js';
 import { buildRemoteTuiInnerBash } from './build-remote-tui-bash.js';
-import { isAcceptableRemoteFsPath, parseServerIdFromTargetKey, bashSingleQuote } from './remote-ssh-helpers.js';
+import {
+  isAcceptableRemoteFsPath,
+  parseServerIdFromTargetKey,
+  bashSingleQuote,
+  REMOTE_SSH_BASH_PATH_BOOTSTRAP,
+} from './remote-ssh-helpers.js';
 
 /**
  * @param {import('ws').WebSocket} _ws
@@ -37,6 +42,7 @@ export async function startRemoteShellPtyOnWebSocket(_ws, userId, data) {
   }
 
   const fullScript = [
+    REMOTE_SSH_BASH_PATH_BOOTSTRAP,
     'set -euo pipefail',
     `cd ${bashSingleQuote(projectPath)}` + ' || { echo "cd failed" >&2; exit 1; }',
     built.script,

@@ -4,13 +4,101 @@
  */
 
 import { acquirePooledSshClient, takeExecSlot, releaseExecSlot } from './remote-ssh-pool.js';
-import { isAcceptableRemoteFsPath, parseServerIdFromTargetKey, bashSingleQuote } from './remote-ssh-helpers.js';
+import {
+  isAcceptableRemoteFsPath,
+  parseServerIdFromTargetKey,
+  bashSingleQuote,
+  REMOTE_SSH_BASH_PATH_BOOTSTRAP,
+} from './remote-ssh-helpers.js';
 import { createNormalizedMessage } from '../providers/types.js';
+import { getRemoteClaudeSessionsForApi } from './remote-claude-data.js';
 
 const MAX_OUT = Math.max(1_000_000, Number(process.env.CLOUDCLI_REMOTE_CLAUDE_MAX_OUTPUT || 20 * 1024 * 1024) || 20 * 1024 * 1024);
 
+/** 与 build-remote-tui-bash.js 中 --resume 所用 id 规则一致；排除前端占位 `new-session-*` */
+const REMOTE_PRINT_RESUME_ID_RE = /^[a-zA-Z0-9_.\-:]+$/;
+
+/**
+ * @param {unknown} sessionId
+ * @returns {string | null} 可传给 `claude --resume` 的 id，否则 null
+ */
+function remoteClaudePrintResumeId(sessionId) {
+  if (sessionId == null) {
+    return null;
+  }
+  const s = String(sessionId).trim();
+  if (!s || s.startsWith('new-session-') || s.length > 280) {
+    return null;
+  }
+  if (!REMOTE_PRINT_RESUME_ID_RE.test(s)) {
+    return null;
+  }
+  return s;
+}
+
 function makeTargetKey(serverId) {
   return `remote:${serverId}`;
+}
+
+/**
+ * claude/claudecode 在非 TTY 下可能先往 stderr 打印「stdin 等待」类提示；远端脚本用 2>&1 合并进 stdout，
+ * 否则会与模型正文一起进 stream_delta。配合 bash 侧 `< /dev/null` 可消除产生；此处再剥残留前缀。
+ * @returns {(chunk: string) => string}
+ */
+function createRemoteClaudeStdoutPrefixFilter() {
+  let buf = '';
+  let passed = false;
+  /** 中文：「3 秒内」等数字可能随版本变化 */
+  const reCn = /^警告：\d+ 秒内未收到标准输入数据[\s\S]*?等待更长时间。\s*/;
+  const reEnWarn = /^Warning:[^\n]{0,500}\n?/i;
+  const reEnNoData = /^No data received within \d+ seconds[^\n]*\n?/i;
+
+  return (chunk) => {
+    if (passed) {
+      return chunk;
+    }
+    buf += chunk;
+    let m = buf.match(reCn);
+    if (m) {
+      buf = buf.slice(m[0].length);
+      passed = true;
+      return buf;
+    }
+    m = buf.match(reEnNoData);
+    if (m) {
+      buf = buf.slice(m[0].length);
+      passed = true;
+      return buf;
+    }
+    m = buf.match(reEnWarn);
+    if (m && /stdin|input|pipe|continuing/i.test(m[0])) {
+      buf = buf.slice(m[0].length);
+      passed = true;
+      return buf;
+    }
+    if (buf.length > 0) {
+      const startsCnWarn = /^警告/.test(buf);
+      if (!startsCnWarn && !/^Warn/i.test(buf) && !/^No data received/i.test(buf)) {
+        passed = true;
+        const out = buf;
+        buf = '';
+        return out;
+      }
+      if (buf.length >= 2 && buf[0] === '警' && buf[1] !== '告') {
+        passed = true;
+        const out = buf;
+        buf = '';
+        return out;
+      }
+    }
+    if (buf.length > 2048) {
+      passed = true;
+      const out = buf;
+      buf = '';
+      return out;
+    }
+    return '';
+  };
 }
 
 /** @type {Map<string, { stream: any, releaseAll: () => void }>} */
@@ -55,7 +143,7 @@ export function abortRemoteSshClaudeSession(sessionId) {
  * @returns {Promise<void>}
  */
 export async function streamRemoteClaudePromptOverSsh({ userId, command, options, writer }) {
-  const { projectPath, sessionId, model, targetKey, serverId: optSid, useRemoteSsh } = options;
+  const { projectPath, sessionId, model, targetKey, serverId: optSid, useRemoteSsh, projectName: optProjectName } = options;
   if (!useRemoteSsh) {
     return;
   }
@@ -88,20 +176,30 @@ export async function streamRemoteClaudePromptOverSsh({ userId, command, options
 
   const b64 = Buffer.from(String(command), 'utf8').toString('base64');
   const cwd = String(projectPath).trim();
+  const projectName = typeof optProjectName === 'string' ? optProjectName.trim() : '';
   const modelArg = (model && String(model).trim()) || '';
 
   const q = (s) => bashSingleQuote(s);
-  // claude -p 打印流；会话恢复交由 CLI/远端 JSONL 侧处理（P2 先不拼 --continue，减少版本差异）
+  const resumeId = remoteClaudePrintResumeId(sessionId);
+  // 有会话 id 时必须 `claude --resume <id> -p ...`，否则每次 -p 都是新会话（与本地 SDK resume 行为对齐）
   const scriptLines = [
+    REMOTE_SSH_BASH_PATH_BOOTSTRAP,
     'set -euo pipefail',
     'cd ' + q(cwd) + ' || { echo "cd failed" >&2; exit 1; }',
     `PROMPT=$(printf '%s' '${b64}' | base64 -d)`,
     'CCLI=$(command -v claudecode 2>/dev/null || command -v claude 2>/dev/null) || { echo "claude or claudecode not in remote PATH" >&2; exit 1; }',
   ];
-  if (modelArg) {
-    scriptLines.push('exec "$CCLI" -p "$PROMPT" --model ' + q(modelArg) + ' 2>&1');
+  if (resumeId) {
+    scriptLines.push('RSID=' + q(resumeId));
+    if (modelArg) {
+      scriptLines.push('exec "$CCLI" --resume "$RSID" -p "$PROMPT" --model ' + q(modelArg) + ' < /dev/null 2>&1');
+    } else {
+      scriptLines.push('exec "$CCLI" --resume "$RSID" -p "$PROMPT" < /dev/null 2>&1');
+    }
+  } else if (modelArg) {
+    scriptLines.push('exec "$CCLI" -p "$PROMPT" --model ' + q(modelArg) + ' < /dev/null 2>&1');
   } else {
-    scriptLines.push('exec "$CCLI" -p "$PROMPT" 2>&1');
+    scriptLines.push('exec "$CCLI" -p "$PROMPT" < /dev/null 2>&1');
   }
   const fullScript = scriptLines.join('\n');
   if (b64.length > 4_000_000) {
@@ -157,30 +255,56 @@ export async function streamRemoteClaudePromptOverSsh({ userId, command, options
         active.set(workSid, { stream, releaseAll });
 
         let n = 0;
+        const stripPrefix = createRemoteClaudeStdoutPrefixFilter();
         const onData = (buf) => {
           const t = buf.toString('utf8');
           n += t.length;
           if (n > MAX_OUT) {
             return;
           }
+          const forwarded = stripPrefix(t);
+          if (!forwarded) {
+            return;
+          }
           writer.send(
-            createNormalizedMessage({ kind: 'stream_delta', content: t, sessionId: workSid, provider: 'claude', targetKey: tk }),
+            createNormalizedMessage({ kind: 'stream_delta', content: forwarded, sessionId: workSid, provider: 'claude', targetKey: tk }),
           );
         };
         stream.on('data', onData);
-        stream.on('close', (code) => {
+        stream.on('close', async (code) => {
           active.delete(workSid);
           releaseAll();
+          const ok = code == null || code === 0;
+          // 须先用占位 workSid 结束流式，再发 session_created；否则 finalize 找不到 __streaming_* 槽位
           writer.send(createNormalizedMessage({ kind: 'stream_end', sessionId: workSid, provider: 'claude', targetKey: tk }));
           writer.send(
             createNormalizedMessage({
               kind: 'complete',
-              exitCode: code == null || code === 0 ? 0 : 1,
+              exitCode: ok ? 0 : 1,
               sessionId: workSid,
               provider: 'claude',
               targetKey: tk,
             }),
           );
+          if (ok && !resumeId && projectName) {
+            try {
+              const result = await getRemoteClaudeSessionsForApi(userId, serverId, projectName, 25, 0);
+              const newest = result?.sessions?.[0];
+              if (newest?.id && String(workSid).startsWith('new-session-')) {
+                writer.send(
+                  createNormalizedMessage({
+                    kind: 'session_created',
+                    newSessionId: newest.id,
+                    sessionId: workSid,
+                    provider: 'claude',
+                    targetKey: tk,
+                  }),
+                );
+              }
+            } catch (e) {
+              console.warn('[remote-claude-ssh-ws] session_created probe failed:', e?.message || e);
+            }
+          }
           resolve();
         });
       });

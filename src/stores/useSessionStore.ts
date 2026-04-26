@@ -148,9 +148,11 @@ export function useSessionStore() {
   const [, setTick] = useState(0);
   const notify = useCallback((rawSessionId: string) => {
     const want = getSessionStoreKey(rawSessionId);
-    const act = activeSessionIdRef.current ? getSessionStoreKey(activeSessionIdRef.current) : null;
-    if (act !== null && want === act) {
-      setTick(n => n + 1);
+    const actRaw = activeSessionIdRef.current;
+    const act = actRaw ? getSessionStoreKey(actRaw) : null;
+    // 尚无正式 sessionId 时（例如新会话占位 `new-session-*`），act 为 null；仍须 tick 才能显示首条远程流式回复
+    if (act === null || want === act) {
+      setTick((n) => n + 1);
     }
   }, []);
 
@@ -213,6 +215,12 @@ export function useSessionStore() {
       const data = await response.json();
       const messages: NormalizedMessage[] = data.messages || [];
 
+      // Initial page load: treat server as source of truth. Realtime rows often use
+      // different ids than the API (e.g. after new-session-* -> UUID migration),
+      // so keeping both makes computeMerged show duplicates until a full refresh.
+      if ((opts.offset ?? 0) === 0) {
+        slot.realtimeMessages = [];
+      }
       slot.serverMessages = messages;
       slot.total = data.total ?? messages.length;
       slot.hasMore = Boolean(data.hasMore);
@@ -417,6 +425,39 @@ export function useSessionStore() {
   }, [notify]);
 
   /**
+   * 将占位会话（如 `new-session-*`）下的消息迁到真实 sessionId（与远端 session_created 对齐）。
+   */
+  const reassignSessionMessages = useCallback((fromRawId: string, toRawId: string) => {
+    if (!fromRawId || !toRawId || fromRawId === toRawId) {
+      return;
+    }
+    const fromKey = getSessionStoreKey(fromRawId);
+    const toKey = getSessionStoreKey(toRawId);
+    const fromSlot = storeRef.current.get(fromKey);
+    if (!fromSlot) {
+      return;
+    }
+    const toSlot = getSlot(toRawId);
+    const oldStreamId = `__streaming_${fromKey}`;
+    const newStreamId = `__streaming_${toKey}`;
+    toSlot.serverMessages = [...fromSlot.serverMessages];
+    toSlot.realtimeMessages = fromSlot.realtimeMessages.map((m) => ({
+      ...m,
+      sessionId: toRawId,
+      id: m.id === oldStreamId ? newStreamId : m.id,
+    }));
+    toSlot.total = fromSlot.total;
+    toSlot.hasMore = fromSlot.hasMore;
+    toSlot.fetchedAt = fromSlot.fetchedAt;
+    recomputeMergedIfNeeded(toSlot);
+    storeRef.current.delete(fromKey);
+    if (activeSessionIdRef.current === fromRawId) {
+      activeSessionIdRef.current = toRawId;
+    }
+    notify(toRawId);
+  }, [getSlot, notify]);
+
+  /**
    * Clear realtime messages for a session (e.g., after stream completes and server fetch catches up).
    */
   const clearRealtime = useCallback((rawSessionId: string) => {
@@ -457,6 +498,7 @@ export function useSessionStore() {
     isStale,
     updateStreaming,
     finalizeStreaming,
+    reassignSessionMessages,
     clearRealtime,
     getMessages,
     getSessionSlot,
@@ -464,7 +506,7 @@ export function useSessionStore() {
     getSlot, has, clearEntireStore, fetchFromServer, fetchMore,
     appendRealtime, appendRealtimeBatch, refreshFromServer,
     setActiveSession, setStatus, isStale, updateStreaming, finalizeStreaming,
-    clearRealtime, getMessages, getSessionSlot,
+    reassignSessionMessages, clearRealtime, getMessages, getSessionSlot,
   ]);
 }
 

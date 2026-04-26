@@ -34,6 +34,7 @@ interface UseChatComposerStateArgs {
   selectedProject: Project | null;
   selectedSession: ProjectSession | null;
   currentSessionId: string | null;
+  setCurrentSessionId: (sessionId: string | null) => void;
   provider: SessionProvider;
   permissionMode: PermissionMode | string;
   cyclePermissionMode: () => void;
@@ -108,6 +109,7 @@ export function useChatComposerState({
   selectedProject,
   selectedSession,
   currentSessionId,
+  setCurrentSessionId,
   provider,
   permissionMode,
   cyclePermissionMode,
@@ -563,7 +565,9 @@ export function useChatComposerState({
           // Reset stale pending IDs from previous interrupted runs before creating a new one.
           sessionStorage.removeItem('pendingSessionId');
         }
-        pendingViewSessionRef.current = { sessionId: null, startedAt: Date.now() };
+        // 与下方 WebSocket options.sessionId 一致，否则后端用 remote-sess-*、前端 active 仍为 null，首条回复不刷新 UI
+        pendingViewSessionRef.current = { sessionId: sessionToActivate, startedAt: Date.now() };
+        setCurrentSessionId(sessionToActivate);
       }
       onSessionActive?.(sessionToActivate);
       if (effectiveSessionId && !isTemporarySessionId(effectiveSessionId)) {
@@ -603,12 +607,12 @@ export function useChatComposerState({
         sendMessage({
           type: 'cursor-command',
           command: messageContent,
-          sessionId: effectiveSessionId,
+          sessionId: sessionToActivate,
           options: {
             cwd: resolvedProjectPath,
             projectPath: resolvedProjectPath,
-            sessionId: effectiveSessionId,
-            resume: Boolean(effectiveSessionId),
+            sessionId: sessionToActivate,
+            resume: Boolean(effectiveSessionId && !isTemporarySessionId(effectiveSessionId)),
             model: cursorModel,
             skipPermissions: toolsSettings?.skipPermissions || false,
             sessionSummary,
@@ -619,12 +623,12 @@ export function useChatComposerState({
         sendMessage({
           type: 'codex-command',
           command: messageContent,
-          sessionId: effectiveSessionId,
+          sessionId: sessionToActivate,
           options: {
             cwd: resolvedProjectPath,
             projectPath: resolvedProjectPath,
-            sessionId: effectiveSessionId,
-            resume: Boolean(effectiveSessionId),
+            sessionId: sessionToActivate,
+            resume: Boolean(effectiveSessionId && !isTemporarySessionId(effectiveSessionId)),
             model: codexModel,
             sessionSummary,
             permissionMode: permissionMode === 'plan' ? 'default' : permissionMode,
@@ -634,12 +638,12 @@ export function useChatComposerState({
         sendMessage({
           type: 'gemini-command',
           command: messageContent,
-          sessionId: effectiveSessionId,
+          sessionId: sessionToActivate,
           options: {
             cwd: resolvedProjectPath,
             projectPath: resolvedProjectPath,
-            sessionId: effectiveSessionId,
-            resume: Boolean(effectiveSessionId),
+            sessionId: sessionToActivate,
+            resume: Boolean(effectiveSessionId && !isTemporarySessionId(effectiveSessionId)),
             model: geminiModel,
             sessionSummary,
             permissionMode,
@@ -654,8 +658,9 @@ export function useChatComposerState({
           options: {
             projectPath: resolvedProjectPath,
             cwd: resolvedProjectPath,
-            sessionId: effectiveSessionId,
-            resume: Boolean(effectiveSessionId),
+            projectName: selectedProject.name,
+            sessionId: sessionToActivate,
+            resume: Boolean(effectiveSessionId && !isTemporarySessionId(effectiveSessionId)),
             toolsSettings,
             permissionMode,
             model: claudeModel,
@@ -717,6 +722,7 @@ export function useChatComposerState({
       isRemote,
       isRemoteReadOnly,
       targetKey,
+      setCurrentSessionId,
     ],
   );
 

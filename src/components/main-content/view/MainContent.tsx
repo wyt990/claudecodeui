@@ -147,7 +147,11 @@ function MainContent({
   }, [shouldShowTasksTab, activeTab, setActiveTab]);
 
   useEffect(() => {
-    if (isRemoteWithProject && activeTab !== 'chat' && activeTab !== 'preview' && activeTab !== 'shell') {
+    if (!isRemoteWithProject) {
+      return;
+    }
+    const allowedWhenRemote = new Set<AppTab>(['chat', 'preview', 'shell', 'files']);
+    if (!allowedWhenRemote.has(activeTab)) {
       setActiveTab('chat');
     }
   }, [isRemoteWithProject, activeTab, setActiveTab]);
@@ -279,7 +283,7 @@ function MainContent({
           onResizeStart={handleResizeStart}
           onCloseEditor={handleCloseEditor}
           onToggleEditorExpand={handleToggleEditorExpand}
-          projectPath={selectedProject.path}
+          projectPath={selectedProject.fullPath || selectedProject.path}
           fillSpace={activeTab === 'files'}
           mainPaneHidden={hideMainFilePane}
         />

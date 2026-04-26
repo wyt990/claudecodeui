@@ -234,9 +234,22 @@ export function useChatRealtimeHandlers({
         const newSessionId = msg.newSessionId;
         if (!newSessionId) break;
 
+        const fromWire = typeof msg.sessionId === 'string' ? msg.sessionId.trim() : '';
+        if (
+          fromWire
+          && fromWire !== newSessionId
+          && (fromWire.startsWith('new-session-') || fromWire.startsWith('remote-sess-'))
+        ) {
+          sessionStore.reassignSessionMessages(fromWire, newSessionId);
+        }
+
         if (!currentSessionId || currentSessionId.startsWith('new-session-')) {
           sessionStorage.setItem('pendingSessionId', newSessionId);
-          if (pendingViewSessionRef.current && !pendingViewSessionRef.current.sessionId) {
+          if (
+            pendingViewSessionRef.current
+            && (!pendingViewSessionRef.current.sessionId
+              || pendingViewSessionRef.current.sessionId.startsWith('new-session-'))
+          ) {
             pendingViewSessionRef.current.sessionId = newSessionId;
           }
           setCurrentSessionId(newSessionId);
@@ -246,6 +259,11 @@ export function useChatRealtimeHandlers({
           );
         }
         onNavigateToSession?.(newSessionId);
+        if (fromWire.startsWith('new-session-') && typeof window !== 'undefined' && window.refreshProjects) {
+          setTimeout(() => {
+            window.refreshProjects?.();
+          }, 400);
+        }
         break;
       }
 

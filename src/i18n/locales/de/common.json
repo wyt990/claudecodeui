@@ -98,9 +98,12 @@
     "projectFiles": "Projektdateien"
   },
   "remoteTarget": {
-    "tabDisabled": "Not available in a remote workspace until that feature is wired to the SSH target (per §7.1).",
+    "tabDisabled": "In diesem Remote-Arbeitsbereich noch nicht verfügbar.",
+    "tabBlockedGit": "Git läuft noch auf dem App-Host, nicht per SSH (nicht implementiert).",
+    "tabBlockedTasks": "Tasks nutzen weiter den TaskMaster-Pfad des Hosts (SSH fehlt).",
+    "tabBlockedPlugin": "Dieses Plugin ist für den Remote-SSH-Arbeitsbereich noch nicht angebunden.",
     "mainWorkspaceTitle": "Remote workspace: {{name}}",
-    "mainWorkspaceBody": "A project on this list still refers to the host running CloudCLI. When remote sessions and file tools are implemented, the main view will use the SSH target you selected."
+    "mainWorkspaceBody": "Chat, Dateien und Terminal nutzen den gewählten SSH-Server. Git, Tasks und einige Plugins folgen später."
   },
   "fileTree": {
     "loading": "Dateien werden geladen...",

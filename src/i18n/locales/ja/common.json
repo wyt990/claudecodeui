@@ -98,9 +98,12 @@
     "projectFiles": "プロジェクトファイル"
   },
   "remoteTarget": {
-    "tabDisabled": "Not available in a remote workspace until that feature is wired to the SSH target (per §7.1).",
+    "tabDisabled": "このリモートワークスペースではまだ利用できません。",
+    "tabBlockedGit": "Git はアプリ実行ホスト上のみ（SSH 経由は未実装）。",
+    "tabBlockedTasks": "タスクはホストの TaskMaster パス前提（SSH 未対応）。",
+    "tabBlockedPlugin": "このプラグインはリモート SSH に未接続です。",
     "mainWorkspaceTitle": "Remote workspace: {{name}}",
-    "mainWorkspaceBody": "A project on this list still refers to the host running CloudCLI. When remote sessions and file tools are implemented, the main view will use the SSH target you selected."
+    "mainWorkspaceBody": "チャット・ファイル・ターミナルは選択中の SSH を使用。Git・タスク・一部プラグインは今後対応予定です。"
   },
   "fileTree": {
     "loading": "ファイルを読み込んでいます...",

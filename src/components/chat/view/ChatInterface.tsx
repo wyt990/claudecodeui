@@ -204,6 +204,7 @@ function ChatInterface({
     selectedProject,
     selectedSession,
     currentSessionId,
+    setCurrentSessionId,
     provider,
     permissionMode,
     cyclePermissionMode,
