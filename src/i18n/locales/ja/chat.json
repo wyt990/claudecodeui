@@ -112,6 +112,8 @@
     "placeholderDefault": "メッセージを入力...",
     "disabled": "入力無効",
     "remoteReadOnly": "Read-only: viewing history on the remote target. Full chat in a later release (P2).",
+    "notConnected": "Not connected to the server. Wait until the connection is ready or refresh the page.",
+    "sendDropped": "Message was not sent: WebSocket is not connected. Check the connection and try again.",
     "attachFiles": "ファイルを添付",
     "attachImages": "画像を添付",
     "send": "送信",

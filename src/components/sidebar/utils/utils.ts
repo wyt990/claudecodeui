@@ -1,4 +1,5 @@
 import type { TFunction } from 'i18next';
+import { humanizeClaudeSessionSummary } from '../../../../shared/claudeSessionSummaryDisplay';
 import type { Project } from '../../../types/app';
 import type {
   AdditionalSessionsByProject,
@@ -64,7 +65,9 @@ export const getSessionName = (session: SessionWithProvider, t: TFunction): stri
     return session.summary || session.name || t('projects.newSession');
   }
 
-  return session.summary || t('projects.newSession');
+  const raw = session.summary || '';
+  const name = humanizeClaudeSessionSummary(raw) || raw;
+  return name.trim() ? name : t('projects.newSession');
 };
 
 export const getSessionTime = (session: SessionWithProvider): string => {

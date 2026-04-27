@@ -28,6 +28,7 @@ function ChatInterface({
   selectedSession,
   ws,
   sendMessage,
+  webSocketConnected = true,
   latestMessage,
   onFileOpen,
   onInputFocusChange,
@@ -296,6 +297,7 @@ function ChatInterface({
     setIsUserScrolledUp,
     setPendingPermissionRequests,
     isRemoteReadOnly: isRemote && provider !== 'claude',
+    webSocketConnected,
   });
 
   // On WebSocket reconnect, re-fetch the current session's messages from the server

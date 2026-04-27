@@ -188,9 +188,12 @@ export default function SidebarContent({
               )}
               {conversationResults.results.map((projectResult) => (
                 <div key={projectResult.projectName} className="space-y-1">
-                  <div className="flex items-center gap-1.5 px-1 py-1">
+                  <div className="flex min-w-0 items-center gap-1.5 px-1 py-1">
                     <Folder className="h-3 w-3 flex-shrink-0 text-muted-foreground" />
-                    <span className="truncate text-xs font-medium text-foreground">
+                    <span
+                      className="min-w-0 flex-1 truncate text-xs font-medium text-foreground"
+                      title={projectResult.projectDisplayName}
+                    >
                       {projectResult.projectDisplayName}
                     </span>
                   </div>
@@ -206,9 +209,9 @@ export default function SidebarContent({
                         session.matches[0]?.snippet
                       )}
                     >
-                      <div className="mb-1 flex items-center gap-1.5">
+                      <div className="mb-1 flex min-w-0 items-center gap-1.5">
                         <MessageSquare className="h-3 w-3 flex-shrink-0 text-primary" />
-                        <span className="truncate text-xs font-medium text-foreground">
+                        <span className="min-w-0 flex-1 truncate text-xs font-medium text-foreground" title={session.sessionSummary}>
                           {session.sessionSummary}
                         </span>
                         {session.provider && session.provider !== 'claude' && (

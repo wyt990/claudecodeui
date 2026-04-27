@@ -38,6 +38,7 @@ function MainContent({
   setActiveTab,
   ws,
   sendMessage,
+  webSocketConnected,
   latestMessage,
   isMobile,
   onMenuClick,
@@ -201,6 +202,7 @@ function MainContent({
                 selectedSession={selectedSession}
                 ws={ws}
                 sendMessage={sendMessage}
+                webSocketConnected={webSocketConnected}
                 latestMessage={latestMessage}
                 onFileOpen={handleFileOpen}
                 onInputFocusChange={onInputFocusChange}

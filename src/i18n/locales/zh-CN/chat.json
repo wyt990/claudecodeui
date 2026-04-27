@@ -113,6 +113,8 @@
     "placeholderDefault": "输入您的消息...",
     "disabled": "输入已禁用",
     "remoteReadOnly": "只读：当前在远程环境查看历史；流式对话在后续阶段（P2）开放。",
+    "notConnected": "未连接到服务器。请等待连接就绪或刷新页面后再试。",
+    "sendDropped": "消息未发出：WebSocket 未连接。请检查连接后重试。",
     "attachFiles": "附加文件",
     "attachImages": "附加图片",
     "send": "发送",

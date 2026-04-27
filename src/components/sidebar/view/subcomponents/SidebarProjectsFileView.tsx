@@ -97,7 +97,7 @@ export default function SidebarProjectsFileView({
                     treeOpen && 'border-border/70 bg-accent/15',
                   )}
                 >
-                  <div className="flex items-center gap-0.5 px-0.5 py-0.5">
+                  <div className="flex min-w-0 items-center gap-0.5 px-0.5 py-0.5">
                     <button
                       type="button"
                       className={cn(
@@ -120,7 +120,12 @@ export default function SidebarProjectsFileView({
                           isSelected || treeOpen ? 'text-primary' : 'text-muted-foreground',
                         )}
                       />
-                      <span className="truncate text-xs font-medium text-foreground">{project.displayName || project.name}</span>
+                      <span
+                        className="min-w-0 flex-1 truncate text-xs font-medium text-foreground"
+                        title={project.displayName || project.name}
+                      >
+                        {project.displayName || project.name}
+                      </span>
                     </button>
                     {canOpenRemote && (
                       <Button

@@ -5,7 +5,8 @@ import { getTargetKey } from '../utils/targetKey.js';
 
 type WebSocketContextType = {
   ws: WebSocket | null;
-  sendMessage: (message: any) => void;
+  /** @returns 是否已写入 socket（未连接时返回 false） */
+  sendMessage: (message: any) => boolean;
   latestMessage: any | null;
   isConnected: boolean;
 };
@@ -107,9 +108,10 @@ const useWebSocketProviderState = (): WebSocketContextType => {
     const socket = wsRef.current;
     if (socket && socket.readyState === WebSocket.OPEN) {
       socket.send(JSON.stringify(message));
-    } else if (import.meta.env.DEV) {
-      console.warn('[WebSocket] sendMessage skipped: socket not open');
+      return true;
     }
+    console.warn('[WebSocket] sendMessage skipped: socket not open (readyState=', socket?.readyState, ')');
+    return false;
   }, []);
 
   const value: WebSocketContextType = useMemo(() =>

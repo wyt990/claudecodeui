@@ -196,8 +196,10 @@ export default function SidebarProjectItem({
                     />
                   ) : (
                     <>
-                      <div className="flex min-w-0 flex-1 items-center justify-between">
-                        <h3 className="truncate text-sm font-medium text-foreground">{project.displayName}</h3>
+                      <div className="flex min-w-0 flex-1 items-center justify-between gap-2">
+                        <h3 className="min-w-0 flex-1 truncate text-sm font-medium text-foreground" title={project.displayName}>
+                          {project.displayName}
+                        </h3>
                         {tasksEnabled && (
                           <TaskIndicator
                             status={taskStatus}
@@ -330,7 +332,7 @@ export default function SidebarProjectItem({
         <Button
           variant="ghost"
           className={cn(
-            'hidden md:flex w-full justify-between p-2 h-auto font-normal hover:bg-accent/50',
+            'hidden md:grid h-auto w-full grid-cols-[minmax(0,1fr)_auto] items-center gap-2 p-2 font-normal hover:bg-accent/50',
             isSelected && 'bg-accent text-accent-foreground',
             isStarred &&
               !isSelected &&
@@ -338,13 +340,13 @@ export default function SidebarProjectItem({
           )}
           onClick={selectAndToggleProject}
         >
-          <div className="flex min-w-0 flex-1 items-center gap-3">
+          <div className="flex min-w-0 items-center gap-3 overflow-hidden">
             {isExpanded ? (
               <FolderOpen className="h-4 w-4 flex-shrink-0 text-primary" />
             ) : (
               <Folder className="h-4 w-4 flex-shrink-0 text-muted-foreground" />
             )}
-            <div className="min-w-0 flex-1 text-left">
+            <div className="min-w-0 text-left">
               {isEditing ? (
                 <div className="space-y-1">
                   <input
@@ -368,14 +370,14 @@ export default function SidebarProjectItem({
                   </div>
                 </div>
               ) : (
-                <div>
+                <div className="min-w-0">
                   <div className="truncate text-sm font-semibold text-foreground" title={project.displayName}>
                     {project.displayName}
                   </div>
-                  <div className="text-xs text-muted-foreground">
+                  <div className="truncate text-xs text-muted-foreground" title={project.fullPath || undefined}>
                     {sessionCountDisplay}
                     {project.fullPath !== project.displayName && (
-                      <span className="ml-1 opacity-60" title={project.fullPath}>
+                      <span className="ml-1 opacity-60">
                         {' - '}
                         {project.fullPath.length > 25 ? `...${project.fullPath.slice(-22)}` : project.fullPath}
                       </span>
@@ -386,7 +388,7 @@ export default function SidebarProjectItem({
             </div>
           </div>
 
-          <div className="flex flex-shrink-0 items-center gap-1">
+          <div className="flex w-max flex-shrink-0 items-center gap-1">
             {isEditing ? (
               <>
                 <div

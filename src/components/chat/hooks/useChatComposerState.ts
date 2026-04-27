@@ -24,6 +24,7 @@ import { escapeRegExp } from '../utils/chatFormatting';
 import { useFileMentions } from './useFileMentions';
 import { type SlashCommand, useSlashCommands } from './useSlashCommands';
 import { useEnvironment } from '../../../contexts/EnvironmentContext';
+import { useTranslation } from 'react-i18next';
 
 type PendingViewSession = {
   sessionId: string | null;
@@ -45,7 +46,7 @@ interface UseChatComposerStateArgs {
   isLoading: boolean;
   canAbortSession: boolean;
   tokenBudget: Record<string, unknown> | null;
-  sendMessage: (message: unknown) => void;
+  sendMessage: (message: unknown) => boolean;
   sendByCtrlEnter?: boolean;
   onSessionActive?: (sessionId?: string | null) => void;
   onSessionProcessing?: (sessionId?: string | null) => void;
@@ -64,6 +65,8 @@ interface UseChatComposerStateArgs {
   setPendingPermissionRequests: Dispatch<SetStateAction<PendingPermissionRequest[]>>;
   /** 远程目标（P1）仅拉取历史，不发起 CLI/WebSocket 对话 */
   isRemoteReadOnly?: boolean;
+  /** WebSocket 已连接时为 true；未传则视为已连接 */
+  webSocketConnected?: boolean;
 }
 
 interface MentionableFile {
@@ -138,7 +141,9 @@ export function useChatComposerState({
   setIsUserScrolledUp,
   setPendingPermissionRequests,
   isRemoteReadOnly = false,
+  webSocketConnected = true,
 }: UseChatComposerStateArgs) {
+  const { t } = useTranslation('chat');
   const { isRemote, currentTarget, targetKey } = useEnvironment();
   const [input, setInput] = useState(() => {
     if (typeof window !== 'undefined' && selectedProject) {
@@ -477,6 +482,17 @@ export function useChatComposerState({
         return;
       }
 
+      if (webSocketConnected === false) {
+        addMessage({
+          type: 'error',
+          content: t('input.notConnected', {
+            defaultValue: 'Not connected to the server. Wait until the connection is ready or refresh the page.',
+          }),
+          timestamp: new Date(),
+        });
+        return;
+      }
+
       // Intercept slash commands: if input starts with /commandName, execute as command with args
       const trimmedInput = currentInput.trim();
       if (trimmedInput.startsWith('/')) {
@@ -520,7 +536,19 @@ export function useChatComposerState({
           });
 
           if (!response.ok) {
-            throw new Error('Failed to upload images');
+            let detail = '';
+            try {
+              const text = await response.text();
+              try {
+                const j = JSON.parse(text) as { error?: string };
+                detail = typeof j?.error === 'string' ? j.error : '';
+              } catch {
+                detail = text.trim().slice(0, 400);
+              }
+            } catch {
+              /* ignore */
+            }
+            throw new Error(detail || `HTTP ${response.status}`);
           }
 
           const result = await response.json();
@@ -603,8 +631,9 @@ export function useChatComposerState({
       const resolvedProjectPath = selectedProject.fullPath || selectedProject.path || '';
       const sessionSummary = getNotificationSessionSummary(selectedSession, currentInput);
 
+      let delivered = false;
       if (provider === 'cursor') {
-        sendMessage({
+        delivered = sendMessage({
           type: 'cursor-command',
           command: messageContent,
           sessionId: sessionToActivate,
@@ -620,7 +649,7 @@ export function useChatComposerState({
           },
         });
       } else if (provider === 'codex') {
-        sendMessage({
+        delivered = sendMessage({
           type: 'codex-command',
           command: messageContent,
           sessionId: sessionToActivate,
@@ -635,7 +664,7 @@ export function useChatComposerState({
           },
         });
       } else if (provider === 'gemini') {
-        sendMessage({
+        delivered = sendMessage({
           type: 'gemini-command',
           command: messageContent,
           sessionId: sessionToActivate,
@@ -652,7 +681,7 @@ export function useChatComposerState({
         });
       } else {
         const remoteSshClaude = isRemote && provider === 'claude' && currentTarget.kind === 'remote';
-        sendMessage({
+        delivered = sendMessage({
           type: 'claude-command',
           command: messageContent,
           options: {
@@ -675,6 +704,20 @@ export function useChatComposerState({
               : {}),
           },
         });
+      }
+
+      if (!delivered) {
+        setIsLoading(false);
+        setCanAbortSession(false);
+        setClaudeStatus(null);
+        addMessage({
+          type: 'error',
+          content: t('input.sendDropped', {
+            defaultValue: 'Message was not sent: WebSocket is not connected. Check the connection and try again.',
+          }),
+          timestamp: new Date(),
+        });
+        return;
       }
 
       setInput('');
@@ -723,6 +766,8 @@ export function useChatComposerState({
       isRemoteReadOnly,
       targetKey,
       setCurrentSessionId,
+      t,
+      webSocketConnected,
     ],
   );
 

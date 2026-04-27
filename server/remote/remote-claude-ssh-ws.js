@@ -13,6 +13,7 @@ import {
 import { createNormalizedMessage } from '../providers/types.js';
 import { getRemoteClaudeSessionsForApi } from './remote-claude-data.js';
 import { sshServerClaudeProviderPrefsDb } from '../database/db.js';
+import { appendImagePathsToRemotePrompt, uploadRemoteClaudeImages } from './remote-claude-ssh-images.js';
 
 const MAX_OUT = Math.max(1_000_000, Number(process.env.CLOUDCLI_REMOTE_CLAUDE_MAX_OUTPUT || 20 * 1024 * 1024) || 20 * 1024 * 1024);
 
@@ -252,20 +253,6 @@ export async function streamRemoteClaudePromptOverSsh({ userId, command, options
     );
     return;
   }
-  if (optionsMut?.images && Array.isArray(optionsMut.images) && optionsMut.images.length) {
-    writer.send(
-      createNormalizedMessage({
-        kind: 'error',
-        content: 'Remote mode does not support image upload yet. Remove images or use local target.',
-        sessionId,
-        provider: 'claude',
-        targetKey: tk,
-      }),
-    );
-    return;
-  }
-
-  const b64 = Buffer.from(String(command), 'utf8').toString('base64');
   const cwd = String(projectPath).trim();
   const projectName = typeof optProjectName === 'string' ? optProjectName.trim() : '';
   const modelArg = (model && String(model).trim()) || '';
@@ -274,31 +261,6 @@ export async function streamRemoteClaudePromptOverSsh({ userId, command, options
   const resumeId = remoteClaudePrintResumeId(sessionId);
   const permSuffix =
     buildRemoteClaudePermissionModeCliSuffix(optionsMut) + buildRemoteClaudeAllowedDisallowedCliSuffix(optionsMut);
-  // 有会话 id 时必须 `claude --resume <id> -p ...`，否则每次 -p 都是新会话（与本地 SDK resume 行为对齐）
-  const scriptLines = [
-    REMOTE_SSH_BASH_PATH_BOOTSTRAP,
-    'set -euo pipefail',
-    'cd ' + q(cwd) + ' || { echo "cd failed" >&2; exit 1; }',
-    `PROMPT=$(printf '%s' '${b64}' | base64 -d)`,
-    'CCLI=$(command -v claudecode 2>/dev/null || command -v claude 2>/dev/null) || { echo "claude or claudecode not in remote PATH" >&2; exit 1; }',
-  ];
-  if (resumeId) {
-    scriptLines.push('RSID=' + q(resumeId));
-    if (modelArg) {
-      scriptLines.push('exec "$CCLI"' + permSuffix + ' --resume "$RSID" -p "$PROMPT" --model ' + q(modelArg) + ' < /dev/null 2>&1');
-    } else {
-      scriptLines.push('exec "$CCLI"' + permSuffix + ' --resume "$RSID" -p "$PROMPT" < /dev/null 2>&1');
-    }
-  } else if (modelArg) {
-    scriptLines.push('exec "$CCLI"' + permSuffix + ' -p "$PROMPT" --model ' + q(modelArg) + ' < /dev/null 2>&1');
-  } else {
-    scriptLines.push('exec "$CCLI"' + permSuffix + ' -p "$PROMPT" < /dev/null 2>&1');
-  }
-  const fullScript = scriptLines.join('\n');
-  if (b64.length > 4_000_000) {
-    writer.send(createNormalizedMessage({ kind: 'error', content: 'Prompt too large for remote', sessionId, provider: 'claude', targetKey: tk }));
-    return;
-  }
 
   await takeExecSlot(userId, serverId);
   let acq;
@@ -326,6 +288,58 @@ export async function streamRemoteClaudePromptOverSsh({ userId, command, options
       /* */
     }
   };
+
+  let promptBody = String(command ?? '');
+  const hasImages = optionsMut?.images && Array.isArray(optionsMut.images) && optionsMut.images.length > 0;
+  if (hasImages) {
+    try {
+      const { paths } = await uploadRemoteClaudeImages(userId, serverId, client, cwd, optionsMut.images);
+      promptBody = appendImagePathsToRemotePrompt(promptBody, paths);
+    } catch (e) {
+      const msg = e && typeof e === 'object' && 'message' in e ? String(e.message) : String(e);
+      console.warn('[remote-claude-ssh-ws] remote image upload failed:', msg, e);
+      releaseAll();
+      writer.send(
+        createNormalizedMessage({
+          kind: 'error',
+          content: msg || 'Remote image upload failed',
+          sessionId,
+          provider: 'claude',
+          targetKey: tk,
+        }),
+      );
+      return;
+    }
+  }
+
+  const b64 = Buffer.from(promptBody, 'utf8').toString('base64');
+  if (b64.length > 4_000_000) {
+    releaseAll();
+    writer.send(createNormalizedMessage({ kind: 'error', content: 'Prompt too large for remote', sessionId, provider: 'claude', targetKey: tk }));
+    return;
+  }
+
+  // 有会话 id 时必须 `claude --resume <id> -p ...`，否则每次 -p 都是新会话（与本地 SDK resume 行为对齐）
+  const scriptLines = [
+    REMOTE_SSH_BASH_PATH_BOOTSTRAP,
+    'set -euo pipefail',
+    'cd ' + q(cwd) + ' || { echo "cd failed" >&2; exit 1; }',
+    `PROMPT=$(printf '%s' '${b64}' | base64 -d)`,
+    'CCLI=$(command -v claudecode 2>/dev/null || command -v claude 2>/dev/null) || { echo "claude or claudecode not in remote PATH" >&2; exit 1; }',
+  ];
+  if (resumeId) {
+    scriptLines.push('RSID=' + q(resumeId));
+    if (modelArg) {
+      scriptLines.push('exec "$CCLI"' + permSuffix + ' --resume "$RSID" -p "$PROMPT" --model ' + q(modelArg) + ' < /dev/null 2>&1');
+    } else {
+      scriptLines.push('exec "$CCLI"' + permSuffix + ' --resume "$RSID" -p "$PROMPT" < /dev/null 2>&1');
+    }
+  } else if (modelArg) {
+    scriptLines.push('exec "$CCLI"' + permSuffix + ' -p "$PROMPT" --model ' + q(modelArg) + ' < /dev/null 2>&1');
+  } else {
+    scriptLines.push('exec "$CCLI"' + permSuffix + ' -p "$PROMPT" < /dev/null 2>&1');
+  }
+  const fullScript = scriptLines.join('\n');
 
   const workSid = String(
     sessionId != null && String(sessionId).trim() !== ''

@@ -20,7 +20,7 @@ interface UseChatSessionStateArgs {
   selectedProject: Project | null;
   selectedSession: ProjectSession | null;
   ws: WebSocket | null;
-  sendMessage: (message: unknown) => void;
+  sendMessage: (message: unknown) => boolean;
   autoScrollToBottom?: boolean;
   externalMessageUpdate?: number;
   processingSessions?: Set<string>;
@@ -178,10 +178,13 @@ export function useChatSessionState({
   }
 
   const chatMessages = useMemo(() => {
-    const all = normalizedToChatMessages(storeMessages);
-    // Show pending user message when no session data exists yet (new session, pre-backend-response)
-    if (pendingUserMessage && all.length === 0) {
-      return [pendingUserMessage];
+    let all = normalizedToChatMessages(storeMessages);
+    // 新会话：先 appendRealtime 了 error（如远程不支持附图）而用户气泡仍在 pending 时，原先 all.length>0 会吞掉 pending
+    if (pendingUserMessage) {
+      const hasUser = all.some((m) => m.type === 'user');
+      if (!hasUser) {
+        all = [pendingUserMessage, ...all];
+      }
     }
     if (viewHiddenCount > 0 && viewHiddenCount < all.length) return all.slice(0, -viewHiddenCount);
     return all;

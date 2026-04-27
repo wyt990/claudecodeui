@@ -13,6 +13,7 @@ import {
   harvestAbsolutePathStringsFromValue,
 } from '../utils/claude-jsonl-cwd.js';
 import { detectTaskMasterFolderRemote } from '../services/taskmaster-detect-folder-remote.js';
+import { humanizeClaudeSessionSummary } from '../../shared/claudeSessionSummaryDisplay.js';
 
 const MAX_FILE_BYTES = 8 * 1024 * 1024;
 const CLAUDE_PROJECTS_REL = path.posix.join('.claude', 'projects');
@@ -431,10 +432,15 @@ export async function getRemoteClaudeSessionsInternal(sftp, home, projectName, l
       if (ent.type === 'user' && ent.message) {
         const t = ent.message;
         if (t && t.role === 'user' && t.content) {
+          let raw = '';
           if (typeof t.content === 'string') {
-            summary = t.content.slice(0, 200);
+            raw = t.content.slice(0, 200);
           } else if (Array.isArray(t.content) && t.content[0] && t.content[0].text) {
-            summary = String(t.content[0].text).slice(0, 200);
+            raw = String(t.content[0].text).slice(0, 200);
+          }
+          if (raw) {
+            const pretty = humanizeClaudeSessionSummary(raw);
+            if (pretty) summary = pretty;
           }
         }
       }

@@ -71,6 +71,7 @@ import {
   buildRemoteProjectRootStatProbeList,
   harvestAbsolutePathStringsFromValue,
 } from './utils/claude-jsonl-cwd.js';
+import { humanizeClaudeSessionSummary } from '../shared/claudeSessionSummaryDisplay.js';
 
 // Import TaskMaster detection functions
 async function detectTaskMasterFolder(projectPath) {
@@ -806,7 +807,7 @@ async function parseJsonlSessions(filePath) {
 
           // Handle summary entries that don't have sessionId yet
           if (entry.type === 'summary' && entry.summary && !entry.sessionId && entry.leafUuid) {
-            pendingSummaries.set(entry.leafUuid, entry.summary);
+            pendingSummaries.set(entry.leafUuid, humanizeClaudeSessionSummary(entry.summary));
           }
 
           if (entry.sessionId) {
@@ -831,7 +832,7 @@ async function parseJsonlSessions(filePath) {
 
             // Update summary from summary entries with sessionId
             if (entry.type === 'summary' && entry.summary) {
-              session.summary = entry.summary;
+              session.summary = humanizeClaudeSessionSummary(entry.summary);
             }
 
             // Track last user and assistant messages (skip system messages)
@@ -910,7 +911,9 @@ async function parseJsonlSessions(filePath) {
         // Prefer last user message, fall back to last assistant message
         const lastMessage = session.lastUserMessage || session.lastAssistantMessage;
         if (lastMessage) {
-          session.summary = lastMessage.length > 50 ? lastMessage.substring(0, 50) + '...' : lastMessage;
+          const pretty = humanizeClaudeSessionSummary(lastMessage);
+          const line = pretty || lastMessage;
+          session.summary = line.length > 50 ? line.substring(0, 50) + '...' : line;
         }
       }
     }
