@@ -47,6 +47,47 @@ function logTaskMasterInstallDebug(message, meta = {}) {
     }
 }
 
+/** 远端 task-master / npx 长任务超时（可被 CLOUDCLI_REMOTE_TASKMASTER_TIMEOUT_MS 或 CLOUDCLI_REMOTE_ARGV_EXEC_TIMEOUT_MS 覆盖）。 */
+const TASKMASTER_SSH_EXEC_MS = Math.max(
+    120_000,
+    Math.min(
+        900_000,
+        Number(process.env.CLOUDCLI_REMOTE_TASKMASTER_TIMEOUT_MS || process.env.CLOUDCLI_REMOTE_ARGV_EXEC_TIMEOUT_MS) ||
+            600_000,
+    ),
+) || 600_000;
+
+/**
+ * @param {import('express').Response} res
+ * @param {unknown} error
+ * @returns {boolean} 若已写入 4xx 响应则为 true
+ */
+function tryRespondWorkspaceResolveError(res, error) {
+    const st = /** @type {any} */ (error).httpStatus;
+    if (st === 400 || st === 404) {
+        res.status(st).json({
+            error: st === 404 ? 'Project not found' : 'Bad request',
+            message: /** @type {Error} */ (error).message,
+        });
+        return true;
+    }
+    return false;
+}
+
+/**
+ * PRD 文件名：仅 basename，防止路径穿越。
+ * @param {unknown} name
+ * @param {string} [fallback]
+ */
+function sanitizeTaskMasterFileName(name, fallback = 'prd.txt') {
+    const raw = String(name == null ? '' : name).trim() || fallback;
+    const base = path.basename(raw);
+    if (!base || base === '.' || base === '..') {
+        return fallback;
+    }
+    return base;
+}
+
 /**
  * @param {string} cmd
  * @param {string[]} args
@@ -1223,34 +1264,79 @@ router.delete('/prd/:projectName/:fileName', async (req, res) => {
 router.post('/init/:projectName', async (req, res) => {
     try {
         const { projectName } = req.params;
-        
-        // Get project path
-        let projectPath;
+
+        let ctx;
         try {
-            projectPath = await extractProjectDirectory(projectName);
+            ctx = await resolveWorkspaceProject(req, String(projectName));
         } catch (error) {
-            return res.status(404).json({
-                error: 'Project not found',
-                message: `Project "${projectName}" does not exist`
+            if (tryRespondWorkspaceResolveError(res, error)) {
+                return;
+            }
+            throw error;
+        }
+        const projectPath = ctx.projectPath;
+
+        if (ctx.mode === 'remote') {
+            const tm = await detectTaskMasterFolderRemote(ctx.userId, ctx.serverId, ctx.projectPath);
+            if (tm.hasTaskmaster) {
+                return res.status(400).json({
+                    error: 'TaskMaster already initialized',
+                    message: 'TaskMaster is already configured for this project',
+                });
+            }
+            // 非交互：CI / npx --yes；stdin 仍可能遇提示，用有限 yes 管道（与本地 stdin 写 yes 对齐）
+            // 不用 pipefail：yes 遇 head 关闭读端会 SIGPIPE，避免整条管道以非 0 结束
+            const bashInit =
+                'set -eu; export CI=1 DEBIAN_FRONTEND=noninteractive NPM_CONFIG_YES=true; ' +
+                '( command -v yes >/dev/null 2>&1 && yes || true ) | head -n 60 | ' +
+                'npx --yes -p task-master-ai task-master init';
+            const r = await remoteBashLineResult(ctx.userId, ctx.serverId, ctx.projectPath, bashInit, TASKMASTER_SSH_EXEC_MS);
+            const out = (r.stdout || '') + (r.stderr ? `\n${r.stderr}` : '');
+            if (r.timedOut) {
+                return res.status(504).json({
+                    error: 'TaskMaster init timed out on remote',
+                    message: 'Increase CLOUDCLI_REMOTE_TASKMASTER_TIMEOUT_MS or run init once over SSH.',
+                    output: out,
+                });
+            }
+            if (r.code !== 0) {
+                console.error('TaskMaster remote init failed:', r.stderr || r.stdout);
+                return res.status(500).json({
+                    error: 'Failed to initialize TaskMaster on remote',
+                    message: r.stderr || r.stdout || `exit ${r.code}`,
+                    code: r.code,
+                });
+            }
+            if (req.app.locals.wss) {
+                broadcastTaskMasterProjectUpdate(req.app.locals.wss, projectName, {
+                    hasTaskmaster: true,
+                    status: 'initialized',
+                });
+            }
+            return res.json({
+                projectName,
+                projectPath,
+                message: 'TaskMaster initialized successfully',
+                output: out,
+                timestamp: new Date().toISOString(),
             });
         }
 
-        // Check if TaskMaster is already initialized
+        // --- local ---
         const taskMasterPath = path.join(projectPath, '.taskmaster');
         try {
             await fsPromises.access(taskMasterPath, fs.constants.F_OK);
             return res.status(400).json({
                 error: 'TaskMaster already initialized',
-                message: 'TaskMaster is already configured for this project'
+                message: 'TaskMaster is already configured for this project',
             });
-        } catch (error) {
-            // Directory doesn't exist, we can proceed
+        } catch {
+            /* proceed */
         }
 
-        // Run taskmaster init command
         const initProcess = spawn('npx', ['--yes', '-p', 'task-master-ai', 'task-master', 'init'], {
             cwd: projectPath,
-            stdio: ['pipe', 'pipe', 'pipe']
+            stdio: ['pipe', 'pipe', 'pipe'],
         });
 
         let stdout = '';
@@ -1266,13 +1352,11 @@ router.post('/init/:projectName', async (req, res) => {
 
         initProcess.on('close', (code) => {
             if (code === 0) {
-                // Broadcast TaskMaster project update via WebSocket
                 if (req.app.locals.wss) {
-                    broadcastTaskMasterProjectUpdate(
-                        req.app.locals.wss, 
-                        projectName, 
-                        { hasTaskmaster: true, status: 'initialized' }
-                    );
+                    broadcastTaskMasterProjectUpdate(req.app.locals.wss, projectName, {
+                        hasTaskmaster: true,
+                        status: 'initialized',
+                    });
                 }
 
                 res.json({
@@ -1280,27 +1364,25 @@ router.post('/init/:projectName', async (req, res) => {
                     projectPath,
                     message: 'TaskMaster initialized successfully',
                     output: stdout,
-                    timestamp: new Date().toISOString()
+                    timestamp: new Date().toISOString(),
                 });
             } else {
                 console.error('TaskMaster init failed:', stderr);
                 res.status(500).json({
                     error: 'Failed to initialize TaskMaster',
                     message: stderr || stdout,
-                    code
+                    code,
                 });
             }
         });
 
-        // Send 'yes' responses to automated prompts
         initProcess.stdin.write('yes\n');
         initProcess.stdin.end();
-
     } catch (error) {
         console.error('TaskMaster init error:', error);
         res.status(500).json({
             error: 'Failed to initialize TaskMaster',
-            message: error.message
+            message: error.message,
         });
     }
 });
@@ -1317,43 +1399,74 @@ router.post('/add-task/:projectName', async (req, res) => {
         if (!prompt && (!title || !description)) {
             return res.status(400).json({
                 error: 'Missing required parameters',
-                message: 'Either "prompt" or both "title" and "description" are required'
-            });
-        }
-        
-        // Get project path
-        let projectPath;
-        try {
-            projectPath = await extractProjectDirectory(projectName);
-        } catch (error) {
-            return res.status(404).json({
-                error: 'Project not found',
-                message: `Project "${projectName}" does not exist`
+                message: 'Either "prompt" or both "title" and "description" are required',
             });
         }
 
-        // Build the task-master add-task command
-        const args = ['task-master-ai', 'add-task'];
-        
+        let ctx;
+        try {
+            ctx = await resolveWorkspaceProject(req, String(projectName));
+        } catch (error) {
+            if (tryRespondWorkspaceResolveError(res, error)) {
+                return;
+            }
+            throw error;
+        }
+        const projectPath = ctx.projectPath;
+
+        const args = ['npx', '--yes', 'task-master-ai', 'add-task'];
         if (prompt) {
-            args.push('--prompt', prompt);
-            args.push('--research'); // Use research for AI-generated tasks
+            args.push('--prompt', String(prompt));
+            args.push('--research');
         } else {
             args.push('--prompt', `Create a task titled "${title}" with description: ${description}`);
         }
-        
         if (priority) {
-            args.push('--priority', priority);
+            args.push('--priority', String(priority));
         }
-        
         if (dependencies) {
-            args.push('--dependencies', dependencies);
+            args.push('--dependencies', String(dependencies));
         }
 
-        // Run task-master add-task command
-        const addTaskProcess = spawn('npx', args, {
+        if (ctx.mode === 'remote') {
+            const r = await remoteArgvExecResult(
+                ctx.userId,
+                ctx.serverId,
+                ctx.projectPath,
+                args,
+                TASKMASTER_SSH_EXEC_MS,
+            );
+            const out = (r.stdout || '') + (r.stderr ? `\n${r.stderr}` : '');
+            if (r.timedOut) {
+                return res.status(504).json({
+                    error: 'Add task timed out on remote',
+                    message: 'Increase CLOUDCLI_REMOTE_TASKMASTER_TIMEOUT_MS if needed.',
+                    output: out,
+                });
+            }
+            if (r.code !== 0) {
+                console.error('Remote add task failed:', r.stderr);
+                return res.status(500).json({
+                    error: 'Failed to add task',
+                    message: r.stderr || r.stdout || `exit ${r.code}`,
+                    code: r.code,
+                });
+            }
+            if (req.app.locals.wss) {
+                broadcastTaskMasterTasksUpdate(req.app.locals.wss, projectName);
+            }
+            return res.json({
+                projectName,
+                projectPath,
+                message: 'Task added successfully',
+                output: out,
+                timestamp: new Date().toISOString(),
+            });
+        }
+
+        const addTaskProcess = spawn(args[0], args.slice(1), {
             cwd: projectPath,
-            stdio: ['pipe', 'pipe', 'pipe']
+            stdio: ['pipe', 'pipe', 'pipe'],
         });
 
         let stdout = '';
@@ -1368,17 +1481,9 @@ router.post('/add-task/:projectName', async (req, res) => {
         });
 
         addTaskProcess.on('close', (code) => {
-            console.log('Add task process completed with code:', code);
-            console.log('Stdout:', stdout);
-            console.log('Stderr:', stderr);
-            
             if (code === 0) {
-                // Broadcast task update via WebSocket
                 if (req.app.locals.wss) {
-                    broadcastTaskMasterTasksUpdate(
-                        req.app.locals.wss, 
-                        projectName
-                    );
+                    broadcastTaskMasterTasksUpdate(req.app.locals.wss, projectName);
                 }
 
                 res.json({
@@ -1386,25 +1491,24 @@ router.post('/add-task/:projectName', async (req, res) => {
                     projectPath,
                     message: 'Task added successfully',
                     output: stdout,
-                    timestamp: new Date().toISOString()
+                    timestamp: new Date().toISOString(),
                 });
             } else {
                 console.error('Add task failed:', stderr);
                 res.status(500).json({
                     error: 'Failed to add task',
                     message: stderr || stdout,
-                    code
+                    code,
                 });
             }
         });
 
         addTaskProcess.stdin.end();
-
     } catch (error) {
         console.error('Add task error:', error);
         res.status(500).json({
             error: 'Failed to add task',
-            message: error.message
+            message: error.message,
         });
     }
 });
@@ -1417,23 +1521,91 @@ router.put('/update-task/:projectName/:taskId', async (req, res) => {
     try {
         const { projectName, taskId } = req.params;
         const { title, description, status, priority, details } = req.body;
-        
-        // Get project path
-        let projectPath;
+
+        let ctx;
         try {
-            projectPath = await extractProjectDirectory(projectName);
+            ctx = await resolveWorkspaceProject(req, String(projectName));
         } catch (error) {
-            return res.status(404).json({
-                error: 'Project not found',
-                message: `Project "${projectName}" does not exist`
+            if (tryRespondWorkspaceResolveError(res, error)) {
+                return;
+            }
+            throw error;
+        }
+        const projectPath = ctx.projectPath;
+
+        const statusOnly = status && Object.keys(req.body).length === 1;
+
+        const runRemote = async (argv, okMessage, errLabel) => {
+            const r = await remoteArgvExecResult(
+                ctx.userId,
+                ctx.serverId,
+                ctx.projectPath,
+                argv,
+                TASKMASTER_SSH_EXEC_MS,
+            );
+            const out = (r.stdout || '') + (r.stderr ? `\n${r.stderr}` : '');
+            if (r.timedOut) {
+                return res.status(504).json({
+                    error: `${errLabel} timed out on remote`,
+                    message: 'Increase CLOUDCLI_REMOTE_TASKMASTER_TIMEOUT_MS if needed.',
+                    output: out,
+                });
+            }
+            if (r.code !== 0) {
+                console.error(`${errLabel} remote:`, r.stderr);
+                return res.status(500).json({
+                    error: errLabel,
+                    message: r.stderr || r.stdout || `exit ${r.code}`,
+                    code: r.code,
+                });
+            }
+            if (req.app.locals.wss) {
+                broadcastTaskMasterTasksUpdate(req.app.locals.wss, projectName);
+            }
+            return res.json({
+                projectName,
+                projectPath,
+                taskId,
+                message: okMessage,
+                output: out,
+                timestamp: new Date().toISOString(),
             });
+        };
+
+        if (ctx.mode === 'remote') {
+            if (statusOnly) {
+                return await runRemote(
+                    ['npx', '--yes', 'task-master-ai', 'set-status', '--id', String(taskId), '--status', String(status)],
+                    'Task status updated successfully',
+                    'Failed to update task status',
+                );
+            }
+            const updates = [];
+            if (title) updates.push(`title: "${title}"`);
+            if (description) updates.push(`description: "${description}"`);
+            if (priority) updates.push(`priority: "${priority}"`);
+            if (details) updates.push(`details: "${details}"`);
+            const prompt = `Update task with the following changes: ${updates.join(', ')}`;
+            return await runRemote(
+                ['npx', '--yes', 'task-master-ai', 'update-task', '--id', String(taskId), '--prompt', prompt],
+                'Task updated successfully',
+                'Failed to update task',
+            );
         }
 
-        // If only updating status, use set-status command
-        if (status && Object.keys(req.body).length === 1) {
-            const setStatusProcess = spawn('npx', ['task-master-ai', 'set-status', `--id=${taskId}`, `--status=${status}`], {
+        // --- local ---
+        if (statusOnly) {
+            const setStatusProcess = spawn('npx', [
+                '--yes',
+                'task-master-ai',
+                'set-status',
+                '--id',
+                String(taskId),
+                '--status',
+                String(status),
+            ], {
                 cwd: projectPath,
-                stdio: ['pipe', 'pipe', 'pipe']
+                stdio: ['pipe', 'pipe', 'pipe'],
             });
 
             let stdout = '';
@@ -1449,7 +1621,6 @@ router.put('/update-task/:projectName/:taskId', async (req, res) => {
 
             setStatusProcess.on('close', (code) => {
                 if (code === 0) {
-                    // Broadcast task update via WebSocket
                     if (req.app.locals.wss) {
                         broadcastTaskMasterTasksUpdate(req.app.locals.wss, projectName);
                     }
@@ -1460,33 +1631,36 @@ router.put('/update-task/:projectName/:taskId', async (req, res) => {
                         taskId,
                         message: 'Task status updated successfully',
                         output: stdout,
-                        timestamp: new Date().toISOString()
+                        timestamp: new Date().toISOString(),
                     });
                 } else {
                     console.error('Set task status failed:', stderr);
                     res.status(500).json({
                         error: 'Failed to update task status',
                         message: stderr || stdout,
-                        code
+                        code,
                     });
                 }
             });
 
             setStatusProcess.stdin.end();
         } else {
-            // For other updates, use update-task command with a prompt describing the changes
             const updates = [];
             if (title) updates.push(`title: "${title}"`);
             if (description) updates.push(`description: "${description}"`);
             if (priority) updates.push(`priority: "${priority}"`);
             if (details) updates.push(`details: "${details}"`);
-            
+
             const prompt = `Update task with the following changes: ${updates.join(', ')}`;
 
-            const updateProcess = spawn('npx', ['task-master-ai', 'update-task', `--id=${taskId}`, `--prompt=${prompt}`], {
-                cwd: projectPath,
-                stdio: ['pipe', 'pipe', 'pipe']
-            });
+            const updateProcess = spawn(
+                'npx',
+                ['--yes', 'task-master-ai', 'update-task', '--id', String(taskId), '--prompt', prompt],
+                {
+                    cwd: projectPath,
+                    stdio: ['pipe', 'pipe', 'pipe'],
+                },
+            );
 
             let stdout = '';
             let stderr = '';
@@ -1501,7 +1675,6 @@ router.put('/update-task/:projectName/:taskId', async (req, res) => {
 
             updateProcess.on('close', (code) => {
                 if (code === 0) {
-                    // Broadcast task update via WebSocket
                     if (req.app.locals.wss) {
                         broadcastTaskMasterTasksUpdate(req.app.locals.wss, projectName);
                     }
@@ -1512,26 +1685,25 @@ router.put('/update-task/:projectName/:taskId', async (req, res) => {
                         taskId,
                         message: 'Task updated successfully',
                         output: stdout,
-                        timestamp: new Date().toISOString()
+                        timestamp: new Date().toISOString(),
                     });
                 } else {
                     console.error('Update task failed:', stderr);
                     res.status(500).json({
                         error: 'Failed to update task',
                         message: stderr || stdout,
-                        code
+                        code,
                     });
                 }
             });
 
             updateProcess.stdin.end();
         }
-
     } catch (error) {
         console.error('Update task error:', error);
         res.status(500).json({
             error: 'Failed to update task',
-            message: error.message
+            message: error.message,
         });
     }
 });
@@ -1543,48 +1715,99 @@ router.put('/update-task/:projectName/:taskId', async (req, res) => {
 router.post('/parse-prd/:projectName', async (req, res) => {
     try {
         const { projectName } = req.params;
-        const { fileName = 'prd.txt', numTasks, append = false } = req.body;
-        
-        // Get project path
-        let projectPath;
+        const { fileName: rawFileName = 'prd.txt', numTasks, append = false } = req.body;
+        const safeName = sanitizeTaskMasterFileName(rawFileName, 'prd.txt');
+
+        let ctx;
         try {
-            projectPath = await extractProjectDirectory(projectName);
+            ctx = await resolveWorkspaceProject(req, String(projectName));
         } catch (error) {
-            return res.status(404).json({
-                error: 'Project not found',
-                message: `Project "${projectName}" does not exist`
+            if (tryRespondWorkspaceResolveError(res, error)) {
+                return;
+            }
+            throw error;
+        }
+        const projectPath = ctx.projectPath;
+
+        const prdPath =
+            ctx.mode === 'remote'
+                ? path.posix.join(projectPath, '.taskmaster', 'docs', safeName)
+                : path.join(projectPath, '.taskmaster', 'docs', safeName);
+
+        if (ctx.mode === 'remote') {
+            try {
+                await remoteStatPath(ctx.userId, ctx.serverId, prdPath);
+            } catch {
+                return res.status(404).json({
+                    error: 'PRD file not found',
+                    message: `File "${safeName}" does not exist in .taskmaster/docs/`,
+                });
+            }
+            const argv = ['npx', '--yes', '-p', 'task-master-ai', 'task-master', 'parse-prd', prdPath];
+            if (numTasks) {
+                argv.push('--num-tasks', String(numTasks));
+            }
+            if (append) {
+                argv.push('--append');
+            }
+            argv.push('--research');
+            const r = await remoteArgvExecResult(
+                ctx.userId,
+                ctx.serverId,
+                ctx.projectPath,
+                argv,
+                TASKMASTER_SSH_EXEC_MS,
+            );
+            const out = (r.stdout || '') + (r.stderr ? `\n${r.stderr}` : '');
+            if (r.timedOut) {
+                return res.status(504).json({
+                    error: 'Parse PRD timed out on remote',
+                    message: 'Increase CLOUDCLI_REMOTE_TASKMASTER_TIMEOUT_MS if needed.',
+                    output: out,
+                });
+            }
+            if (r.code !== 0) {
+                console.error('Parse PRD failed (remote):', r.stderr);
+                return res.status(500).json({
+                    error: 'Failed to parse PRD',
+                    message: r.stderr || r.stdout || `exit ${r.code}`,
+                    code: r.code,
+                });
+            }
+            if (req.app.locals.wss) {
+                broadcastTaskMasterTasksUpdate(req.app.locals.wss, projectName);
+            }
+            return res.json({
+                projectName,
+                projectPath,
+                prdFile: safeName,
+                message: 'PRD parsed and tasks generated successfully',
+                output: out,
+                timestamp: new Date().toISOString(),
             });
         }
 
-        const prdPath = path.join(projectPath, '.taskmaster', 'docs', fileName);
-        
-        // Check if PRD file exists
         try {
             await fsPromises.access(prdPath, fs.constants.F_OK);
-        } catch (error) {
+        } catch {
             return res.status(404).json({
                 error: 'PRD file not found',
-                message: `File "${fileName}" does not exist in .taskmaster/docs/`
+                message: `File "${safeName}" does not exist in .taskmaster/docs/`,
             });
         }
 
-        // Build the command args
-        const args = ['task-master-ai', 'parse-prd', prdPath];
-        
+        const args = ['npx', '--yes', '-p', 'task-master-ai', 'task-master', 'parse-prd', prdPath];
         if (numTasks) {
-            args.push('--num-tasks', numTasks.toString());
+            args.push('--num-tasks', String(numTasks));
         }
-        
         if (append) {
             args.push('--append');
         }
-        
-        args.push('--research'); // Use research for better PRD parsing
+        args.push('--research');
 
-        // Run task-master parse-prd command
-        const parsePRDProcess = spawn('npx', args, {
+        const parsePRDProcess = spawn(args[0], args.slice(1), {
             cwd: projectPath,
-            stdio: ['pipe', 'pipe', 'pipe']
+            stdio: ['pipe', 'pipe', 'pipe'],
         });
 
         let stdout = '';
@@ -1600,39 +1823,34 @@ router.post('/parse-prd/:projectName', async (req, res) => {
 
         parsePRDProcess.on('close', (code) => {
             if (code === 0) {
-                // Broadcast task update via WebSocket
                 if (req.app.locals.wss) {
-                    broadcastTaskMasterTasksUpdate(
-                        req.app.locals.wss, 
-                        projectName
-                    );
+                    broadcastTaskMasterTasksUpdate(req.app.locals.wss, projectName);
                 }
 
                 res.json({
                     projectName,
                     projectPath,
-                    prdFile: fileName,
+                    prdFile: safeName,
                     message: 'PRD parsed and tasks generated successfully',
                     output: stdout,
-                    timestamp: new Date().toISOString()
+                    timestamp: new Date().toISOString(),
                 });
             } else {
                 console.error('Parse PRD failed:', stderr);
                 res.status(500).json({
                     error: 'Failed to parse PRD',
                     message: stderr || stdout,
-                    code
+                    code,
                 });
             }
         });
 
         parsePRDProcess.stdin.end();
-
     } catch (error) {
         console.error('Parse PRD error:', error);
         res.status(500).json({
             error: 'Failed to parse PRD',
-            message: error.message
+            message: error.message,
         });
     }
 });
@@ -2090,47 +2308,69 @@ Description of the business problem, data sources, and expected insights.
 router.post('/apply-template/:projectName', async (req, res) => {
     try {
         const { projectName } = req.params;
-        const { templateId, fileName = 'prd.txt', customizations = {} } = req.body;
+        const { templateId, fileName: rawFileName = 'prd.txt', customizations = {} } = req.body;
+        const safeName = sanitizeTaskMasterFileName(rawFileName, 'prd.txt');
 
         if (!templateId) {
             return res.status(400).json({
                 error: 'Missing required parameter',
-                message: 'templateId is required'
+                message: 'templateId is required',
             });
         }
 
-        // Get project path
-        let projectPath;
+        let ctx;
         try {
-            projectPath = await extractProjectDirectory(projectName);
+            ctx = await resolveWorkspaceProject(req, String(projectName));
         } catch (error) {
-            return res.status(404).json({
-                error: 'Project not found',
-                message: `Project "${projectName}" does not exist`
-            });
+            if (tryRespondWorkspaceResolveError(res, error)) {
+                return;
+            }
+            throw error;
         }
+        const projectPath = ctx.projectPath;
 
-        // Get the template content (this would normally fetch from the templates list)
         const templates = await getAvailableTemplates();
-        const template = templates.find(t => t.id === templateId);
+        const template = templates.find((t) => t.id === templateId);
 
         if (!template) {
             return res.status(404).json({
                 error: 'Template not found',
-                message: `Template "${templateId}" does not exist`
+                message: `Template "${templateId}" does not exist`,
             });
         }
 
-        // Apply customizations to template content
         let content = template.content;
-        
-        // Replace placeholders with customizations
         for (const [key, value] of Object.entries(customizations)) {
             const placeholder = `[${key}]`;
-            content = content.replace(new RegExp(placeholder.replace(/[.*+?^${}()|[\\]\\\\]/g, '\\\\$&'), 'g'), value);
+            content = content.replace(
+                new RegExp(placeholder.replace(/[.*+?^${}()|[\\]\\\\]/g, '\\\\$&'), 'g'),
+                value,
+            );
         }
 
-        // Ensure .taskmaster/docs directory exists
+        if (ctx.mode === 'remote') {
+            const filePath = path.posix.join(projectPath, '.taskmaster', 'docs', safeName);
+            try {
+                await writeRemoteUtf8File(ctx.userId, ctx.serverId, filePath, content);
+            } catch (writeError) {
+                console.error('Failed to write PRD template (remote):', writeError);
+                return res.status(500).json({
+                    error: 'Failed to write PRD template',
+                    message: writeError.message,
+                });
+            }
+            return res.json({
+                projectName,
+                projectPath,
+                templateId,
+                templateName: template.name,
+                fileName: safeName,
+                filePath,
+                message: 'PRD template applied successfully',
+                timestamp: new Date().toISOString(),
+            });
+        }
+
         const docsDir = path.join(projectPath, '.taskmaster', 'docs');
         try {
             await fsPromises.mkdir(docsDir, { recursive: true });
@@ -2138,9 +2378,8 @@ router.post('/apply-template/:projectName', async (req, res) => {
             console.error('Failed to create docs directory:', error);
         }
 
-        const filePath = path.join(docsDir, fileName);
+        const filePath = path.join(docsDir, safeName);
 
-        // Write the template content to the file
         try {
             await fsPromises.writeFile(filePath, content, 'utf8');
 
@@ -2149,25 +2388,23 @@ router.post('/apply-template/:projectName', async (req, res) => {
                 projectPath,
                 templateId,
                 templateName: template.name,
-                fileName,
-                filePath: filePath,
+                fileName: safeName,
+                filePath,
                 message: 'PRD template applied successfully',
-                timestamp: new Date().toISOString()
+                timestamp: new Date().toISOString(),
             });
-
         } catch (writeError) {
             console.error('Failed to write PRD template:', writeError);
             return res.status(500).json({
                 error: 'Failed to write PRD template',
-                message: writeError.message
+                message: writeError.message,
             });
         }
-
     } catch (error) {
         console.error('Apply template error:', error);
         res.status(500).json({
             error: 'Failed to apply PRD template',
-            message: error.message
+            message: error.message,
         });
     }
 });
