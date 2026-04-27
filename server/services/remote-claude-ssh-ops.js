@@ -99,9 +99,9 @@ export async function runRemoteClaudecodeListModels(userId, serverId) {
   try {
     const r = await execBashTextResult(userId, serverId, client, cmd, LIST_TIMEOUT_MS, USE_INTERACTIVE_BASH);
     const raw = (r.stdout || '') + (r.stderr && r.stderr.length ? (r.stdout ? '\n' : '') + r.stderr : '');
-    console.log(
-      `${LOG} userId=${userId} serverId=${serverId} step=list-models code=${r.code} outLen=${(r.stdout || '').length} errLen=${(r.stderr || '').length}`,
-    );
+    // console.log(
+    //  `${LOG} userId=${userId} serverId=${serverId} step=list-models code=${r.code} outLen=${(r.stdout || '').length} errLen=${(r.stderr || '').length}`,
+    // );
     if (r.timedOut) {
       return { raw, models: [], defaultModelId: null, parseError: 'Remote list-models timed out', code: r.code, stderr: r.stderr || '' };
     }

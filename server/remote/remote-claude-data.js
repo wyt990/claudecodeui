@@ -28,7 +28,7 @@ const CLAUDE_PROJECTS_REL = path.posix.join('.claude', 'projects');
  */
 function logInferCwd(msg, extra = {}) {
   const tail = Object.keys(extra).length ? ` ${JSON.stringify(extra)}` : '';
-  console.log(`[remote-claude-data inferCwd] ${msg}${tail}`);
+  // console.log(`[remote-claude-data inferCwd] ${msg}${tail}`);
 }
 
 export async function inferRemoteProjectCwdFromClaudeProjectDir(sftp, pdir, projectName) {
@@ -250,12 +250,12 @@ function streamSftpFileLines(sftp, abspath, forEach) {
  * @param {number} serverId
  */
 export async function getRemoteClaudeProjectList(userId, serverId) {
-  console.log(`[remote-claude-data] getRemoteClaudeProjectList start userId=${userId} serverId=${serverId}`);
+  // console.log(`[remote-claude-data] getRemoteClaudeProjectList start userId=${userId} serverId=${serverId}`);
   return withRemoteSsh(userId, serverId, async ({ sftp, home }) => {
     const projectsRoot = path.posix.join(home, CLAUDE_PROJECTS_REL);
-    console.log(
-      `[remote-claude-data] sftp readdir home=${JSON.stringify(home)} projectsRoot=${JSON.stringify(projectsRoot)}`,
-    );
+    // console.log(
+    //   `[remote-claude-data] sftp readdir home=${JSON.stringify(home)} projectsRoot=${JSON.stringify(projectsRoot)}`,
+    // );
     const out = [];
     const dirents = await new Promise((resolve, reject) => {
       sftp.readdir(projectsRoot, (e, list) => {
@@ -330,9 +330,9 @@ export async function getRemoteClaudeProjectList(userId, serverId) {
       proj.sessions = sr.sessions;
       proj.sessionMeta = { hasMore: sr.hasMore, total: sr.total };
     }
-    console.log(
-      `[remote-claude-data] getRemoteClaudeProjectList done serverId=${serverId} projectCount=${out.length}`,
-    );
+    // console.log(
+    //   `[remote-claude-data] getRemoteClaudeProjectList done serverId=${serverId} projectCount=${out.length}`,
+    // );
     return out;
   });
 }
@@ -564,9 +564,9 @@ export async function getRemoteClaudeSessionsForApi(userId, serverId, projectNam
  */
 export async function deleteRemoteClaudeSession(userId, serverId, projectName, sessionId) {
   const sid = String(sessionId);
-  console.log(
-    `[remote-claude-data] deleteRemoteClaudeSession userId=${userId} serverId=${serverId} project=${projectName} sessionId=${sid}`,
-  );
+  // console.log(
+  //   `[remote-claude-data] deleteRemoteClaudeSession userId=${userId} serverId=${serverId} project=${projectName} sessionId=${sid}`,
+  // );
   return withRemoteSsh(userId, serverId, async ({ sftp, home }) => {
     const pdir = path.posix.join(home, CLAUDE_PROJECTS_REL, projectName);
     const fileList = await new Promise((resolve, reject) => {
@@ -645,7 +645,7 @@ export async function deleteRemoteClaudeSession(userId, serverId, projectName, s
       await new Promise((resolve, reject) => {
         sftp.writeFile(jsonlFile, Buffer.from(out, 'utf8'), (e) => (e ? reject(e) : resolve()));
       });
-      console.log(`[remote-claude-data] deleteRemoteClaudeSession wrote file=${JSON.stringify(file)}`);
+      // console.log(`[remote-claude-data] deleteRemoteClaudeSession wrote file=${JSON.stringify(file)}`);
       return true;
     }
 

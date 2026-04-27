@@ -81,49 +81,49 @@ async function scanCommandsDirectory(dir, baseDir, namespace) {
 const builtInCommands = [
   {
     name: '/help',
-    description: 'Show help documentation for Claude Code',
+    description: '显示 Claude Code 的帮助文档',
     namespace: 'builtin',
     metadata: { type: 'builtin' }
   },
   {
     name: '/clear',
-    description: 'Clear the conversation history',
+    description: '清除当前会话的对话历史',
     namespace: 'builtin',
     metadata: { type: 'builtin' }
   },
   {
     name: '/model',
-    description: 'Switch or view the current AI model',
+    description: '切换或查看当前使用的 AI 模型',
     namespace: 'builtin',
     metadata: { type: 'builtin' }
   },
   {
     name: '/cost',
-    description: 'Display token usage and cost information',
+    description: '显示 Token 用量与费用估算',
     namespace: 'builtin',
     metadata: { type: 'builtin' }
   },
   {
     name: '/memory',
-    description: 'Open CLAUDE.md memory file for editing',
+    description: '打开并编辑项目的 CLAUDE.md 记忆文件',
     namespace: 'builtin',
     metadata: { type: 'builtin' }
   },
   {
     name: '/config',
-    description: 'Open settings and configuration',
+    description: '打开设置与配置',
     namespace: 'builtin',
     metadata: { type: 'builtin' }
   },
   {
     name: '/status',
-    description: 'Show system status and version information',
+    description: '显示系统状态与版本信息',
     namespace: 'builtin',
     metadata: { type: 'builtin' }
   },
   {
     name: '/rewind',
-    description: 'Rewind the conversation to a previous state',
+    description: '将会话回退到之前的某个状态',
     namespace: 'builtin',
     metadata: { type: 'builtin' }
   }

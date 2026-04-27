@@ -119,18 +119,18 @@ export function resolvePathUnderRemoteProjectRoot(projectRootPosix, filePathRaw)
 export async function resolveRemoteClaudeProjectRoot(userId, serverId, projectName) {
   const pn = projectName != null && String(projectName).trim() !== '' ? String(projectName).trim() : '';
   if (!pn) {
-    console.log('[remote-project-files resolveRoot] empty projectName');
+    // console.log('[remote-project-files resolveRoot] empty projectName');
     return null;
   }
   return withRemoteSsh(userId, serverId, async ({ sftp, home }) => {
     const pdir = path.posix.join(home, '.claude', 'projects', pn);
-    console.log('[remote-project-files resolveRoot] start', {
-      userId,
-      serverId,
-      projectName: pn,
-      home,
-      pdir,
-    });
+    // console.log('[remote-project-files resolveRoot] start', {
+    //   userId,
+    //   serverId,
+    //   projectName: pn,
+    //   home,
+    //   pdir,
+    // });
     try {
       await sftpStat(sftp, pdir);
     } catch (stErr) {
@@ -157,7 +157,7 @@ export async function resolveRemoteClaudeProjectRoot(userId, serverId, projectNa
     }
     try {
       const normalized = validateAndNormalizeRemoteProjectPath(raw, 'project-root');
-      console.log('[remote-project-files resolveRoot] ok', { raw, normalized });
+      // console.log('[remote-project-files resolveRoot] ok', { raw, normalized });
       return normalized;
     } catch (valErr) {
       console.log('[remote-project-files resolveRoot] validate failed', {

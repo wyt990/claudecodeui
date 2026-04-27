@@ -2938,6 +2938,23 @@ app.get('/api/projects/:projectName/sessions/:sessionId/token-usage', authentica
             return res.status(400).json({ error: 'Invalid sessionId' });
         }
 
+        const scope = parseTargetScope(req);
+        if (scope.kind === 'invalid') {
+            return res.status(400).json({ error: scope.error, code: 'INVALID_TARGET' });
+        }
+        // Remote targets: session JSONL lives on the SSH host; this endpoint only reads local ~/.claude.
+        if (scope.kind === 'remote') {
+            const parsedCw = parseInt(process.env.CONTEXT_WINDOW, 10);
+            const total = Number.isFinite(parsedCw) ? parsedCw : 160000;
+            return res.json({
+                used: 0,
+                total,
+                breakdown: { input: 0, cacheCreation: 0, cacheRead: 0 },
+                unsupported: true,
+                message: 'Token usage is not available for remote SSH targets (session files are on the remote host).',
+            });
+        }
+
         // Handle Cursor sessions - they use SQLite and don't have token usage info
         if (provider === 'cursor') {
             return res.json({
@@ -3049,6 +3066,9 @@ app.get('/api/projects/:projectName/sessions/:sessionId/token-usage', authentica
 
         const jsonlPath = path.join(projectDir, `${safeSessionId}.jsonl`);
 
+        const parsedContextWindow = parseInt(process.env.CONTEXT_WINDOW, 10);
+        const contextWindow = Number.isFinite(parsedContextWindow) ? parsedContextWindow : 160000;
+
         // Constrain to projectDir
         const rel = path.relative(path.resolve(projectDir), path.resolve(jsonlPath));
         if (rel.startsWith('..') || path.isAbsolute(rel)) {
@@ -3061,14 +3081,18 @@ app.get('/api/projects/:projectName/sessions/:sessionId/token-usage', authentica
             fileContent = await fsPromises.readFile(jsonlPath, 'utf8');
         } catch (error) {
             if (error.code === 'ENOENT') {
-                return res.status(404).json({ error: 'Session file not found', path: jsonlPath });
+                // Avoid 404 noise in devtools when path encoding differs, session was removed, or listing is stale.
+                return res.json({
+                    used: 0,
+                    total: contextWindow,
+                    breakdown: { input: 0, cacheCreation: 0, cacheRead: 0 },
+                    missingSessionFile: true,
+                    message: 'Session transcript not found on this machine for the resolved project path.',
+                });
             }
             throw error; // Re-throw other errors to be caught by outer try-catch
         }
         const lines = fileContent.trim().split('\n');
-
-        const parsedContextWindow = parseInt(process.env.CONTEXT_WINDOW, 10);
-        const contextWindow = Number.isFinite(parsedContextWindow) ? parsedContextWindow : 160000;
         let inputTokens = 0;
         let cacheCreationTokens = 0;
         let cacheReadTokens = 0;
