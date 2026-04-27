@@ -103,7 +103,7 @@
     "tabBlockedTasks": "작업은 호스트 TaskMaster 경로를 사용합니다(SSH 미지원).",
     "tabBlockedPlugin": "이 플러그인은 원격 SSH에 아직 연결되지 않았습니다.",
     "mainWorkspaceTitle": "Remote workspace: {{name}}",
-    "mainWorkspaceBody": "채팅·파일·터미널은 선택한 SSH 서버를 사용합니다. Git·작업·일부 플러그인은 추후 연동 예정입니다."
+    "mainWorkspaceBody": "채팅·파일·터미널·Git·작업은 선택한 SSH 서버를 사용합니다. 일부 플러그인은 아직 원격 미지원입니다."
   },
   "fileTree": {
     "loading": "파일 로딩 중...",

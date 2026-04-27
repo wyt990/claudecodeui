@@ -17,6 +17,18 @@ import { fileURLToPath } from 'url';
 import { dirname } from 'path';
 import os from 'os';
 import { extractProjectDirectory } from '../projects.js';
+import { parseTargetScope } from '../utils/parse-target-scope.js';
+import { sshServersDb } from '../database/db.js';
+import { resolveWorkspaceProject } from '../services/workspace-project-scope.js';
+import {
+    readRemoteFileBytes,
+    remoteStatPath,
+    remoteReaddirBasenames,
+    remoteDeletePathRecursive,
+    writeRemoteUtf8File,
+} from '../services/remote-project-files.js';
+import { remoteArgvExecResult, remoteBashLineResult } from '../services/remote-argv-exec.js';
+import { detectTaskMasterFolderRemote } from '../services/taskmaster-detect-folder-remote.js';
 import { detectTaskMasterMCPServer } from '../utils/mcp-detector.js';
 import { broadcastTaskMasterProjectUpdate, broadcastTaskMasterTasksUpdate } from '../utils/taskmaster-websocket.js';
 
@@ -25,79 +37,92 @@ const __dirname = dirname(__filename);
 
 const router = express.Router();
 
+/** 设为 `1` 时在控制台输出 TaskMaster 安装探测细节（本地 which / 远程 SSH / npx 回退）。 */
+function logTaskMasterInstallDebug(message, meta = {}) {
+    if (process.env.TASKMASTER_INSTALL_DEBUG !== '1') return;
+    try {
+        console.log(`[taskmaster-install-debug] ${message}`, meta);
+    } catch {
+        // ignore
+    }
+}
+
 /**
- * Check if TaskMaster CLI is installed globally
+ * @param {string} cmd
+ * @param {string[]} args
+ * @param {{ shell?: boolean }} [opts]
+ * @returns {Promise<{ code: number | null, stdout: string, stderr: string }>}
+ */
+function spawnOnceCapture(cmd, args, opts = {}) {
+    return new Promise((resolve) => {
+        const child = spawn(cmd, args, {
+            stdio: ['ignore', 'pipe', 'pipe'],
+            shell: opts.shell ?? false,
+        });
+        let stdout = '';
+        let stderr = '';
+        child.stdout.on('data', (d) => {
+            stdout += d.toString();
+        });
+        child.stderr.on('data', (d) => {
+            stderr += d.toString();
+        });
+        child.on('close', (code) => resolve({ code, stdout, stderr }));
+        child.on('error', (err) => resolve({ code: null, stdout, stderr: stderr || String(err.message) }));
+    });
+}
+
+/**
+ * Check if TaskMaster CLI is usable: global `task-master` on PATH, or `npx -p task-master-ai` (init 常用 npx 不留全局命令).
  * @returns {Promise<Object>} Installation status result
  */
 async function checkTaskMasterInstallation() {
-    return new Promise((resolve) => {
-        // Check if task-master command is available
-        const child = spawn('which', ['task-master'], { 
-            stdio: ['ignore', 'pipe', 'pipe'],
-            shell: true 
-        });
-        
-        let output = '';
-        let errorOutput = '';
-        
-        child.stdout.on('data', (data) => {
-            output += data.toString();
-        });
-        
-        child.stderr.on('data', (data) => {
-            errorOutput += data.toString();
-        });
-        
-        child.on('close', (code) => {
-            if (code === 0 && output.trim()) {
-                // TaskMaster is installed, get version
-                const versionChild = spawn('task-master', ['--version'], { 
-                    stdio: ['ignore', 'pipe', 'pipe'],
-                    shell: true 
-                });
-                
-                let versionOutput = '';
-                
-                versionChild.stdout.on('data', (data) => {
-                    versionOutput += data.toString();
-                });
-                
-                versionChild.on('close', (versionCode) => {
-                    resolve({
-                        isInstalled: true,
-                        installPath: output.trim(),
-                        version: versionCode === 0 ? versionOutput.trim() : 'unknown',
-                        reason: null
-                    });
-                });
-                
-                versionChild.on('error', () => {
-                    resolve({
-                        isInstalled: true,
-                        installPath: output.trim(),
-                        version: 'unknown',
-                        reason: null
-                    });
-                });
-            } else {
-                resolve({
-                    isInstalled: false,
-                    installPath: null,
-                    version: null,
-                    reason: 'TaskMaster CLI not found in PATH'
-                });
-            }
-        });
-        
-        child.on('error', (error) => {
-            resolve({
-                isInstalled: false,
-                installPath: null,
-                version: null,
-                reason: `Error checking installation: ${error.message}`
-            });
-        });
+    logTaskMasterInstallDebug('local: probe which task-master');
+    const which = await spawnOnceCapture('which', ['task-master'], { shell: true });
+    logTaskMasterInstallDebug('local: which result', { code: which.code, stdout: which.stdout.trim() });
+
+    if (which.code === 0 && which.stdout.trim()) {
+        const installPath = which.stdout.trim();
+        const ver = await spawnOnceCapture('task-master', ['--version'], { shell: true });
+        logTaskMasterInstallDebug('local: task-master --version', { code: ver.code, stdout: ver.stdout.trim() });
+        return {
+            isInstalled: true,
+            installPath,
+            version: ver.code === 0 ? ver.stdout.trim() || 'unknown' : 'unknown',
+            reason: null,
+            detectedVia: 'global_path',
+        };
+    }
+
+    logTaskMasterInstallDebug('local: npx fallback (task-master-ai)');
+    const npx = await spawnOnceCapture(
+        'npx',
+        ['--yes', '-p', 'task-master-ai', 'task-master', '--version'],
+        { shell: true },
+    );
+    logTaskMasterInstallDebug('local: npx --version result', {
+        code: npx.code,
+        stdout: npx.stdout.trim(),
+        stderrTail: (npx.stderr || '').slice(-600),
     });
+
+    if (npx.code === 0 && npx.stdout.trim()) {
+        return {
+            isInstalled: true,
+            installPath: 'npx:task-master-ai',
+            version: npx.stdout.trim(),
+            reason: null,
+            detectedVia: 'npx_package',
+        };
+    }
+
+    return {
+        isInstalled: false,
+        installPath: null,
+        version: null,
+        reason: 'TaskMaster CLI not on PATH and npx task-master-ai probe failed',
+        detectedVia: null,
+    };
 }
 
 /**
@@ -232,6 +257,121 @@ async function detectTaskMasterFolder(projectPath) {
     }
 }
 
+/**
+ * @param {import('../services/workspace-project-scope.js').WorkspaceProjectCtx} ctx
+ */
+async function detectTaskMasterFolderScoped(ctx) {
+    if (ctx.mode === 'local') {
+        return detectTaskMasterFolder(ctx.projectPath);
+    }
+    return detectTaskMasterFolderRemote(ctx.userId, ctx.serverId, ctx.projectPath);
+}
+
+/**
+ * @param {number} userId
+ * @param {number} serverId
+ */
+async function checkTaskMasterRemoteInstallation(userId, serverId) {
+    const scope = { userId, serverId };
+    logTaskMasterInstallDebug('remote: command -v task-master', scope);
+    const r = await remoteBashLineResult(userId, serverId, '/', 'command -v task-master || true', 45_000);
+    const installPath = (r.stdout || '').trim();
+    logTaskMasterInstallDebug('remote: path probe done', {
+        ...scope,
+        code: r.code,
+        installPath: installPath || null,
+        stderrTail: (r.stderr || '').slice(-400),
+    });
+
+    if (installPath) {
+        const vr = await remoteBashLineResult(userId, serverId, '/', 'task-master --version', 45_000);
+        logTaskMasterInstallDebug('remote: task-master --version', {
+            ...scope,
+            code: vr.code,
+            stdout: (vr.stdout || '').trim(),
+        });
+        return {
+            isInstalled: true,
+            installPath,
+            version: vr.code === 0 ? (vr.stdout || '').trim() || 'unknown' : 'unknown',
+            reason: null,
+            detectedVia: 'global_path',
+        };
+    }
+
+    logTaskMasterInstallDebug('remote: npx fallback (task-master-ai)', scope);
+    const npxScript =
+        'npx --yes -p task-master-ai task-master --version';
+    const npxr = await remoteBashLineResult(userId, serverId, '/', npxScript, 120_000);
+    const npxVer = (npxr.stdout || '').trim();
+    logTaskMasterInstallDebug('remote: npx probe done', {
+        ...scope,
+        code: npxr.code,
+        stdout: npxVer,
+        stderrTail: (npxr.stderr || '').slice(-800),
+        timedOut: Boolean(npxr.timedOut),
+    });
+
+    if (npxr.code === 0 && npxVer) {
+        return {
+            isInstalled: true,
+            installPath: 'npx:task-master-ai',
+            version: npxVer,
+            reason: null,
+            detectedVia: 'npx_package',
+        };
+    }
+
+    return {
+        isInstalled: false,
+        installPath: null,
+        version: null,
+        reason: 'TaskMaster CLI not on remote PATH and npx task-master-ai probe failed',
+        detectedVia: null,
+    };
+}
+
+/**
+ * @param {import('../services/workspace-project-scope.js').WorkspaceProjectCtx} ctx
+ */
+function transformTasksFromJson(tasksData) {
+    let tasks = [];
+    let currentTag = 'master';
+    if (Array.isArray(tasksData)) {
+        tasks = tasksData;
+    } else if (tasksData.tasks) {
+        tasks = tasksData.tasks;
+    } else {
+        if (tasksData[currentTag] && tasksData[currentTag].tasks) {
+            tasks = tasksData[currentTag].tasks;
+        } else if (tasksData.master && tasksData.master.tasks) {
+            tasks = tasksData.master.tasks;
+        } else {
+            const firstTag = Object.keys(tasksData).find(
+                (key) => tasksData[key].tasks && Array.isArray(tasksData[key].tasks),
+            );
+            if (firstTag) {
+                tasks = tasksData[firstTag].tasks;
+                currentTag = firstTag;
+            }
+        }
+    }
+    const transformedTasks = tasks.map((task) => ({
+        id: task.id,
+        title: task.title || 'Untitled Task',
+        description: task.description || '',
+        status: task.status || 'pending',
+        priority: task.priority || 'medium',
+        dependencies: task.dependencies || [],
+        createdAt: task.createdAt || task.created || new Date().toISOString(),
+        updatedAt: task.updatedAt || task.updated || new Date().toISOString(),
+        details: task.details || '',
+        testStrategy: task.testStrategy || task.test_strategy || '',
+        subtasks: task.subtasks || [],
+    }));
+    return { transformedTasks, currentTag };
+}
+
 // MCP detection is now handled by the centralized utility
 
 // API Routes
@@ -242,11 +382,49 @@ async function detectTaskMasterFolder(projectPath) {
  */
 router.get('/installation-status', async (req, res) => {
     try {
-        const installationStatus = await checkTaskMasterInstallation();
+        const scope = parseTargetScope(req);
+        logTaskMasterInstallDebug('GET /installation-status', {
+            scope: scope.kind,
+            serverId: scope.kind === 'remote' ? scope.serverId : undefined,
+            targetHeader: req.headers['x-cloudcli-target'],
+        });
+        let installationStatus;
+        if (scope.kind === 'remote') {
+            if (!sshServersDb.getServer(req.user.id, scope.serverId)) {
+                installationStatus = {
+                    isInstalled: false,
+                    installPath: null,
+                    version: null,
+                    reason: 'SSH server not found',
+                };
+            } else {
+                installationStatus = await checkTaskMasterRemoteInstallation(req.user.id, scope.serverId);
+            }
+        } else if (scope.kind === 'invalid') {
+            installationStatus = {
+                isInstalled: false,
+                installPath: null,
+                version: null,
+                reason: scope.error,
+            };
+        } else {
+            installationStatus = await checkTaskMasterInstallation();
+        }
         
         // Also check for MCP server configuration
         const mcpStatus = await detectTaskMasterMCPServer();
-        
+
+        if (scope.kind === 'remote' && installationStatus) {
+            console.log(
+                `[taskmaster] installation-status remote serverId=${scope.serverId} installed=${installationStatus.isInstalled}` +
+                    (installationStatus.detectedVia ? ` via=${installationStatus.detectedVia}` : '') +
+                    (installationStatus.installPath ? ` path=${installationStatus.installPath}` : '') +
+                    (!installationStatus.isInstalled && installationStatus.reason
+                        ? ` reason=${installationStatus.reason}`
+                        : ''),
+            );
+        }
+
         res.json({
             success: true,
             installation: installationStatus,
@@ -278,36 +456,40 @@ router.get('/installation-status', async (req, res) => {
 router.get('/detect/:projectName', async (req, res) => {
     try {
         const { projectName } = req.params;
-        
-        // Use the existing extractProjectDirectory function to get actual project path
-        let projectPath;
+
+        let ctx;
         try {
-            projectPath = await extractProjectDirectory(projectName);
+            ctx = await resolveWorkspaceProject(req, String(projectName));
         } catch (error) {
-            console.error('Error extracting project directory:', error);
-            return res.status(404).json({
-                error: 'Project path not found',
-                projectName,
-                message: error.message
-            });
-        }
-        
-        // Verify the project path exists
-        try {
-            await fsPromises.access(projectPath, fs.constants.R_OK);
-        } catch (error) {
-            return res.status(404).json({
-                error: 'Project path not accessible',
-                projectPath,
-                projectName,
-                message: error.message
-            });
+            const st = /** @type {any} */ (error).httpStatus;
+            if (st === 400 || st === 404) {
+                return res.status(st).json({
+                    error: 'Project path not found',
+                    projectName,
+                    message: error.message,
+                });
+            }
+            throw error;
         }
 
-        // Run detection in parallel
+        const projectPath = ctx.projectPath;
+
+        if (ctx.mode === 'local') {
+            try {
+                await fsPromises.access(projectPath, fs.constants.R_OK);
+            } catch (error) {
+                return res.status(404).json({
+                    error: 'Project path not accessible',
+                    projectPath,
+                    projectName,
+                    message: error.message,
+                });
+            }
+        }
+
         const [taskMasterResult, mcpResult] = await Promise.all([
-            detectTaskMasterFolder(projectPath),
-            detectTaskMasterMCPServer()
+            detectTaskMasterFolderScoped(ctx),
+            detectTaskMasterMCPServer(),
         ]);
 
         // Determine overall status
@@ -460,25 +642,77 @@ router.post('/initialize/:projectName', async (req, res) => {
 router.get('/next/:projectName', async (req, res) => {
     try {
         const { projectName } = req.params;
-        
-        // Get project path
-        let projectPath;
+
+        let ctx;
         try {
-            projectPath = await extractProjectDirectory(projectName);
+            ctx = await resolveWorkspaceProject(req, String(projectName));
         } catch (error) {
-            return res.status(404).json({
-                error: 'Project not found',
-                message: `Project "${projectName}" does not exist`
-            });
+            const st = /** @type {any} */ (error).httpStatus;
+            if (st === 400 || st === 404) {
+                return res.status(st).json({
+                    error: 'Project not found',
+                    message: error.message,
+                });
+            }
+            throw error;
         }
 
-        // Try to execute task-master next command
+        const projectPath = ctx.projectPath;
+
+        if (ctx.mode === 'remote') {
+            try {
+                const r = await remoteArgvExecResult(
+                    ctx.userId,
+                    ctx.serverId,
+                    ctx.projectPath,
+                    ['task-master', 'next'],
+                    120_000,
+                );
+                if (r.code === 0 && r.stdout.trim()) {
+                    let nextTaskData = null;
+                    try {
+                        nextTaskData = JSON.parse(r.stdout);
+                    } catch {
+                        nextTaskData = { message: r.stdout.trim() };
+                    }
+                    return res.json({
+                        projectName,
+                        projectPath,
+                        nextTask: nextTaskData,
+                        timestamp: new Date().toISOString(),
+                    });
+                }
+            } catch (e) {
+                console.warn('Remote task-master next:', e.message);
+            }
+            try {
+                const tasksPath = path.posix.join(ctx.projectPath, '.taskmaster', 'tasks', 'tasks.json');
+                const buf = await readRemoteFileBytes(ctx.userId, ctx.serverId, tasksPath);
+                const { transformedTasks } = transformTasksFromJson(JSON.parse(buf.toString('utf8')));
+                const nextTask =
+                    transformedTasks.find((t) => t.status === 'pending' || t.status === 'in-progress') || null;
+                return res.json({
+                    projectName,
+                    projectPath,
+                    nextTask,
+                    fallback: true,
+                    message: 'Used fallback (read tasks.json on remote)',
+                    timestamp: new Date().toISOString(),
+                });
+            } catch {
+                return res.status(500).json({
+                    error: 'Failed to get next task',
+                    message: 'Could not run task-master or read tasks.json on remote',
+                });
+            }
+        }
+
         try {
             const { spawn } = await import('child_process');
-            
+
             const nextTaskCommand = spawn('task-master', ['next'], {
                 cwd: projectPath,
-                stdio: ['pipe', 'pipe', 'pipe']
+                stdio: ['pipe', 'pipe', 'pipe'],
             });
 
             let stdout = '';
@@ -506,13 +740,11 @@ router.get('/next/:projectName', async (req, res) => {
                 });
             });
 
-            // Parse the output - task-master next usually returns JSON
             let nextTaskData = null;
             if (stdout.trim()) {
                 try {
                     nextTaskData = JSON.parse(stdout);
                 } catch (parseError) {
-                    // If not JSON, treat as plain text
                     nextTaskData = { message: stdout.trim() };
                 }
             }
@@ -521,25 +753,25 @@ router.get('/next/:projectName', async (req, res) => {
                 projectName,
                 projectPath,
                 nextTask: nextTaskData,
-                timestamp: new Date().toISOString()
+                timestamp: new Date().toISOString(),
             });
-
         } catch (cliError) {
             console.warn('Failed to execute task-master CLI:', cliError.message);
-            
-            // Fallback to loading tasks and finding next one locally
-            // Use localhost to bypass proxy for internal server-to-server calls
-            const tasksResponse = await fetch(`http://localhost:${process.env.SERVER_PORT || process.env.PORT || '3001'}/api/taskmaster/tasks/${encodeURIComponent(projectName)}`, {
-                headers: {
-                    'Authorization': req.headers.authorization
-                }
-            });
+
+            const tasksResponse = await fetch(
+                `http://localhost:${process.env.SERVER_PORT || process.env.PORT || '3001'}/api/taskmaster/tasks/${encodeURIComponent(projectName)}`,
+                {
+                    headers: {
+                        Authorization: req.headers.authorization,
+                    },
+                },
+            );
 
             if (tasksResponse.ok) {
                 const tasksData = await tasksResponse.json();
-                const nextTask = tasksData.tasks?.find(task => 
-                    task.status === 'pending' || task.status === 'in-progress'
-                ) || null;
+                const nextTask =
+                    tasksData.tasks?.find((task) => task.status === 'pending' || task.status === 'in-progress') ||
+                    null;
 
                 res.json({
                     projectName,
@@ -547,13 +779,12 @@ router.get('/next/:projectName', async (req, res) => {
                     nextTask,
                     fallback: true,
                     message: 'Used fallback method (CLI not available)',
-                    timestamp: new Date().toISOString()
+                    timestamp: new Date().toISOString(),
                 });
             } else {
                 throw new Error('Failed to load tasks via fallback method');
             }
         }
-
     } catch (error) {
         console.error('TaskMaster next task error:', error);
         res.status(500).json({
@@ -570,79 +801,48 @@ router.get('/next/:projectName', async (req, res) => {
 router.get('/tasks/:projectName', async (req, res) => {
     try {
         const { projectName } = req.params;
-        
-        // Get project path
-        let projectPath;
+
+        let ctx;
         try {
-            projectPath = await extractProjectDirectory(projectName);
+            ctx = await resolveWorkspaceProject(req, String(projectName));
         } catch (error) {
-            return res.status(404).json({
-                error: 'Project not found',
-                message: `Project "${projectName}" does not exist`
-            });
+            const st = /** @type {any} */ (error).httpStatus;
+            if (st === 400 || st === 404) {
+                return res.status(st).json({
+                    error: 'Project not found',
+                    message: error.message,
+                });
+            }
+            throw error;
         }
 
-        const taskMasterPath = path.join(projectPath, '.taskmaster');
-        const tasksFilePath = path.join(taskMasterPath, 'tasks', 'tasks.json');
+        const projectPath = ctx.projectPath;
+        const tasksFilePath =
+            ctx.mode === 'local'
+                ? path.join(projectPath, '.taskmaster', 'tasks', 'tasks.json')
+                : path.posix.join(projectPath, '.taskmaster', 'tasks', 'tasks.json');
 
-        // Check if tasks file exists
         try {
-            await fsPromises.access(tasksFilePath);
-        } catch (error) {
+            if (ctx.mode === 'local') {
+                await fsPromises.access(tasksFilePath);
+            } else {
+                await remoteStatPath(ctx.userId, ctx.serverId, tasksFilePath);
+            }
+        } catch {
             return res.json({
                 projectName,
                 tasks: [],
-                message: 'No tasks.json file found'
+                message: 'No tasks.json file found',
             });
         }
 
-        // Read and parse tasks file
         try {
-            const tasksContent = await fsPromises.readFile(tasksFilePath, 'utf8');
+            const tasksContent =
+                ctx.mode === 'local'
+                    ? await fsPromises.readFile(tasksFilePath, 'utf8')
+                    : (await readRemoteFileBytes(ctx.userId, ctx.serverId, tasksFilePath)).toString('utf8');
             const tasksData = JSON.parse(tasksContent);
-            
-            let tasks = [];
-            let currentTag = 'master';
-            
-            // Handle both tagged and legacy formats
-            if (Array.isArray(tasksData)) {
-                // Legacy format
-                tasks = tasksData;
-            } else if (tasksData.tasks) {
-                // Simple format with tasks array
-                tasks = tasksData.tasks;
-            } else {
-                // Tagged format - get tasks from current tag or master
-                if (tasksData[currentTag] && tasksData[currentTag].tasks) {
-                    tasks = tasksData[currentTag].tasks;
-                } else if (tasksData.master && tasksData.master.tasks) {
-                    tasks = tasksData.master.tasks;
-                } else {
-                    // Get tasks from first available tag
-                    const firstTag = Object.keys(tasksData).find(key => 
-                        tasksData[key].tasks && Array.isArray(tasksData[key].tasks)
-                    );
-                    if (firstTag) {
-                        tasks = tasksData[firstTag].tasks;
-                        currentTag = firstTag;
-                    }
-                }
-            }
-
-            // Transform tasks to ensure all have required fields
-            const transformedTasks = tasks.map(task => ({
-                id: task.id,
-                title: task.title || 'Untitled Task',
-                description: task.description || '',
-                status: task.status || 'pending',
-                priority: task.priority || 'medium',
-                dependencies: task.dependencies || [],
-                createdAt: task.createdAt || task.created || new Date().toISOString(),
-                updatedAt: task.updatedAt || task.updated || new Date().toISOString(),
-                details: task.details || '',
-                testStrategy: task.testStrategy || task.test_strategy || '',
-                subtasks: task.subtasks || []
-            }));
+            const { transformedTasks, currentTag } = transformTasksFromJson(tasksData);
 
             res.json({
                 projectName,
@@ -651,24 +851,22 @@ router.get('/tasks/:projectName', async (req, res) => {
                 currentTag,
                 totalTasks: transformedTasks.length,
                 tasksByStatus: {
-                    pending: transformedTasks.filter(t => t.status === 'pending').length,
-                    'in-progress': transformedTasks.filter(t => t.status === 'in-progress').length,
-                    done: transformedTasks.filter(t => t.status === 'done').length,
-                    review: transformedTasks.filter(t => t.status === 'review').length,
-                    deferred: transformedTasks.filter(t => t.status === 'deferred').length,
-                    cancelled: transformedTasks.filter(t => t.status === 'cancelled').length
+                    pending: transformedTasks.filter((t) => t.status === 'pending').length,
+                    'in-progress': transformedTasks.filter((t) => t.status === 'in-progress').length,
+                    done: transformedTasks.filter((t) => t.status === 'done').length,
+                    review: transformedTasks.filter((t) => t.status === 'review').length,
+                    deferred: transformedTasks.filter((t) => t.status === 'deferred').length,
+                    cancelled: transformedTasks.filter((t) => t.status === 'cancelled').length,
                 },
-                timestamp: new Date().toISOString()
+                timestamp: new Date().toISOString(),
             });
-
         } catch (parseError) {
             console.error('Failed to parse tasks.json:', parseError);
             return res.status(500).json({
                 error: 'Failed to parse tasks file',
-                message: parseError.message
+                message: parseError.message,
             });
         }
-
     } catch (error) {
         console.error('TaskMaster tasks loading error:', error);
         res.status(500).json({
@@ -685,47 +883,65 @@ router.get('/tasks/:projectName', async (req, res) => {
 router.get('/prd/:projectName', async (req, res) => {
     try {
         const { projectName } = req.params;
-        
-        // Get project path
-        let projectPath;
+
+        let ctx;
         try {
-            projectPath = await extractProjectDirectory(projectName);
+            ctx = await resolveWorkspaceProject(req, String(projectName));
         } catch (error) {
-            return res.status(404).json({
-                error: 'Project not found',
-                message: `Project "${projectName}" does not exist`
-            });
+            const st = /** @type {any} */ (error).httpStatus;
+            if (st === 400 || st === 404) {
+                return res.status(st).json({
+                    error: 'Project not found',
+                    message: error.message,
+                });
+            }
+            throw error;
         }
 
-        const docsPath = path.join(projectPath, '.taskmaster', 'docs');
-        
-        // Check if docs directory exists
+        const projectPath = ctx.projectPath;
+        const docsPath =
+            ctx.mode === 'local'
+                ? path.join(projectPath, '.taskmaster', 'docs')
+                : path.posix.join(projectPath, '.taskmaster', 'docs');
+
         try {
-            await fsPromises.access(docsPath, fs.constants.R_OK);
-        } catch (error) {
+            if (ctx.mode === 'local') {
+                await fsPromises.access(docsPath, fs.constants.R_OK);
+            } else {
+                await remoteStatPath(ctx.userId, ctx.serverId, docsPath);
+            }
+        } catch {
             return res.json({
                 projectName,
                 prdFiles: [],
-                message: 'No .taskmaster/docs directory found'
+                message: 'No .taskmaster/docs directory found',
             });
         }
 
-        // Read directory and filter for PRD files
         try {
-            const files = await fsPromises.readdir(docsPath);
+            const files =
+                ctx.mode === 'local'
+                    ? await fsPromises.readdir(docsPath)
+                    : await remoteReaddirBasenames(ctx.userId, ctx.serverId, docsPath);
             const prdFiles = [];
 
             for (const file of files) {
-                const filePath = path.join(docsPath, file);
-                const stats = await fsPromises.stat(filePath);
-                
+                const filePath = ctx.mode === 'local' ? path.join(docsPath, file) : path.posix.join(docsPath, file);
+                const stats =
+                    ctx.mode === 'local' ? await fsPromises.stat(filePath) : await remoteStatPath(ctx.userId, ctx.serverId, filePath);
+
                 if (stats.isFile() && (file.endsWith('.txt') || file.endsWith('.md'))) {
+                    const mtime = stats.mtime instanceof Date ? stats.mtime : new Date(Number(stats.mtime) || 0);
+                    const birth = stats.birthtime instanceof Date ? stats.birthtime : mtime;
                     prdFiles.push({
                         name: file,
-                        path: path.relative(projectPath, filePath),
+                        path:
+                            ctx.mode === 'local'
+                                ? path.relative(projectPath, filePath)
+                                : path.posix.relative(projectPath, filePath),
                         size: stats.size,
-                        modified: stats.mtime.toISOString(),
-                        created: stats.birthtime.toISOString()
+                        modified: mtime.toISOString(),
+                        created: birth.toISOString(),
                     });
                 }
             }
@@ -734,9 +950,8 @@ router.get('/prd/:projectName', async (req, res) => {
                 projectName,
                 projectPath,
                 prdFiles: prdFiles.sort((a, b) => new Date(b.modified) - new Date(a.modified)),
-                timestamp: new Date().toISOString()
+                timestamp: new Date().toISOString(),
             });
-
         } catch (readError) {
             console.error('Error reading docs directory:', readError);
             return res.status(500).json({
@@ -778,50 +993,60 @@ router.post('/prd/:projectName', async (req, res) => {
             });
         }
 
-        // Get project path
-        let projectPath;
+        let ctx;
         try {
-            projectPath = await extractProjectDirectory(projectName);
+            ctx = await resolveWorkspaceProject(req, String(projectName));
         } catch (error) {
-            return res.status(404).json({
-                error: 'Project not found',
-                message: `Project "${projectName}" does not exist`
-            });
+            const st = /** @type {any} */ (error).httpStatus;
+            if (st === 400 || st === 404) {
+                return res.status(st).json({
+                    error: 'Project not found',
+                    message: error.message,
+                });
+            }
+            throw error;
         }
 
-        const docsPath = path.join(projectPath, '.taskmaster', 'docs');
-        const filePath = path.join(docsPath, fileName);
+        const projectPath = ctx.projectPath;
+        const docsPath =
+            ctx.mode === 'local'
+                ? path.join(projectPath, '.taskmaster', 'docs')
+                : path.posix.join(projectPath, '.taskmaster', 'docs');
+        const filePath = ctx.mode === 'local' ? path.join(docsPath, fileName) : path.posix.join(docsPath, fileName);
 
-        // Ensure docs directory exists
         try {
-            await fsPromises.mkdir(docsPath, { recursive: true });
-        } catch (error) {
-            console.error('Failed to create docs directory:', error);
-            return res.status(500).json({
-                error: 'Failed to create directory',
-                message: error.message
-            });
-        }
-
-        // Write the PRD file
-        try {
-            await fsPromises.writeFile(filePath, content, 'utf8');
-            
-            // Get file stats
-            const stats = await fsPromises.stat(filePath);
-
-            res.json({
-                projectName,
-                projectPath,
-                fileName,
-                filePath: path.relative(projectPath, filePath),
-                size: stats.size,
-                created: stats.birthtime.toISOString(),
-                modified: stats.mtime.toISOString(),
-                message: 'PRD file saved successfully',
-                timestamp: new Date().toISOString()
-            });
-
+            if (ctx.mode === 'local') {
+                await fsPromises.mkdir(docsPath, { recursive: true });
+                await fsPromises.writeFile(filePath, content, 'utf8');
+                const stats = await fsPromises.stat(filePath);
+                res.json({
+                    projectName,
+                    projectPath,
+                    fileName,
+                    filePath: path.relative(projectPath, filePath),
+                    size: stats.size,
+                    created: stats.birthtime.toISOString(),
+                    modified: stats.mtime.toISOString(),
+                    message: 'PRD file saved successfully',
+                    timestamp: new Date().toISOString(),
+                });
+            } else {
+                await writeRemoteUtf8File(ctx.userId, ctx.serverId, filePath, content);
+                const stats = await remoteStatPath(ctx.userId, ctx.serverId, filePath);
+                const mtime = stats.mtime instanceof Date ? stats.mtime : new Date(Number(stats.mtime) || 0);
+                const birth = stats.birthtime instanceof Date ? stats.birthtime : mtime;
+                res.json({
+                    projectName,
+                    projectPath,
+                    fileName,
+                    filePath: path.posix.relative(projectPath, filePath),
+                    size: stats.size,
+                    created: birth.toISOString(),
+                    modified: mtime.toISOString(),
+                    message: 'PRD file saved successfully',
+                    timestamp: new Date().toISOString(),
+                });
+            }
         } catch (writeError) {
             console.error('Failed to write PRD file:', writeError);
             return res.status(500).json({
@@ -846,47 +1071,62 @@ router.post('/prd/:projectName', async (req, res) => {
 router.get('/prd/:projectName/:fileName', async (req, res) => {
     try {
         const { projectName, fileName } = req.params;
-        
-        // Get project path
-        let projectPath;
+
+        let ctx;
         try {
-            projectPath = await extractProjectDirectory(projectName);
+            ctx = await resolveWorkspaceProject(req, String(projectName));
         } catch (error) {
-            return res.status(404).json({
-                error: 'Project not found',
-                message: `Project "${projectName}" does not exist`
-            });
+            const st = /** @type {any} */ (error).httpStatus;
+            if (st === 400 || st === 404) {
+                return res.status(st).json({
+                    error: 'Project not found',
+                    message: error.message,
+                });
+            }
+            throw error;
         }
 
-        const filePath = path.join(projectPath, '.taskmaster', 'docs', fileName);
-        
-        // Check if file exists
+        const projectPath = ctx.projectPath;
+        const filePath =
+            ctx.mode === 'local'
+                ? path.join(projectPath, '.taskmaster', 'docs', fileName)
+                : path.posix.join(projectPath, '.taskmaster', 'docs', fileName);
+
         try {
-            await fsPromises.access(filePath, fs.constants.R_OK);
-        } catch (error) {
+            if (ctx.mode === 'local') {
+                await fsPromises.access(filePath, fs.constants.R_OK);
+            } else {
+                await remoteStatPath(ctx.userId, ctx.serverId, filePath);
+            }
+        } catch {
             return res.status(404).json({
                 error: 'PRD file not found',
-                message: `File "${fileName}" does not exist`
+                message: `File "${fileName}" does not exist`,
             });
         }
 
-        // Read file content
         try {
-            const content = await fsPromises.readFile(filePath, 'utf8');
-            const stats = await fsPromises.stat(filePath);
+            const content =
+                ctx.mode === 'local'
+                    ? await fsPromises.readFile(filePath, 'utf8')
+                    : (await readRemoteFileBytes(ctx.userId, ctx.serverId, filePath)).toString('utf8');
+            const stats =
+                ctx.mode === 'local' ? await fsPromises.stat(filePath) : await remoteStatPath(ctx.userId, ctx.serverId, filePath);
+            const mtime = stats.mtime instanceof Date ? stats.mtime : new Date(Number(stats.mtime) || 0);
+            const birth = stats.birthtime instanceof Date ? stats.birthtime : mtime;
 
             res.json({
                 projectName,
                 projectPath,
                 fileName,
-                filePath: path.relative(projectPath, filePath),
+                filePath:
+                    ctx.mode === 'local' ? path.relative(projectPath, filePath) : path.posix.relative(projectPath, filePath),
                 content,
                 size: stats.size,
-                created: stats.birthtime.toISOString(),
-                modified: stats.mtime.toISOString(),
-                timestamp: new Date().toISOString()
+                created: birth.toISOString(),
+                modified: mtime.toISOString(),
+                timestamp: new Date().toISOString(),
             });
-
         } catch (readError) {
             console.error('Failed to read PRD file:', readError);
             return res.status(500).json({
@@ -911,42 +1151,54 @@ router.get('/prd/:projectName/:fileName', async (req, res) => {
 router.delete('/prd/:projectName/:fileName', async (req, res) => {
     try {
         const { projectName, fileName } = req.params;
-        
-        // Get project path
-        let projectPath;
+
+        let ctx;
         try {
-            projectPath = await extractProjectDirectory(projectName);
+            ctx = await resolveWorkspaceProject(req, String(projectName));
         } catch (error) {
-            return res.status(404).json({
-                error: 'Project not found',
-                message: `Project "${projectName}" does not exist`
-            });
+            const st = /** @type {any} */ (error).httpStatus;
+            if (st === 400 || st === 404) {
+                return res.status(st).json({
+                    error: 'Project not found',
+                    message: error.message,
+                });
+            }
+            throw error;
         }
 
-        const filePath = path.join(projectPath, '.taskmaster', 'docs', fileName);
-        
-        // Check if file exists
+        const projectPath = ctx.projectPath;
+        const filePath =
+            ctx.mode === 'local'
+                ? path.join(projectPath, '.taskmaster', 'docs', fileName)
+                : path.posix.join(projectPath, '.taskmaster', 'docs', fileName);
+
         try {
-            await fsPromises.access(filePath, fs.constants.F_OK);
-        } catch (error) {
+            if (ctx.mode === 'local') {
+                await fsPromises.access(filePath, fs.constants.F_OK);
+            } else {
+                await remoteStatPath(ctx.userId, ctx.serverId, filePath);
+            }
+        } catch {
             return res.status(404).json({
                 error: 'PRD file not found',
-                message: `File "${fileName}" does not exist`
+                message: `File "${fileName}" does not exist`,
             });
         }
 
-        // Delete the file
         try {
-            await fsPromises.unlink(filePath);
+            if (ctx.mode === 'local') {
+                await fsPromises.unlink(filePath);
+            } else {
+                await remoteDeletePathRecursive(ctx.userId, ctx.serverId, filePath);
+            }
 
             res.json({
                 projectName,
                 projectPath,
                 fileName,
                 message: 'PRD file deleted successfully',
-                timestamp: new Date().toISOString()
+                timestamp: new Date().toISOString(),
             });
-
         } catch (deleteError) {
             console.error('Failed to delete PRD file:', deleteError);
             return res.status(500).json({
@@ -996,7 +1248,7 @@ router.post('/init/:projectName', async (req, res) => {
         }
 
         // Run taskmaster init command
-        const initProcess = spawn('npx', ['task-master', 'init'], {
+        const initProcess = spawn('npx', ['--yes', '-p', 'task-master-ai', 'task-master', 'init'], {
             cwd: projectPath,
             stdio: ['pipe', 'pipe', 'pipe']
         });

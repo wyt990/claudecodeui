@@ -2,9 +2,11 @@ import express from 'express';
 import { spawn } from 'child_process';
 import path from 'path';
 import { promises as fs } from 'fs';
-import { extractProjectDirectory } from '../projects.js';
 import { queryClaudeSDK } from '../claude-sdk.js';
 import { spawnCursor } from '../cursor-cli.js';
+import { resolveWorkspaceProject } from '../services/workspace-project-scope.js';
+import { remoteGitSpawnAsync } from '../services/remote-git-spawn.js';
+import { readRemoteFileBytes, remoteStatPath, remoteDeletePathRecursive } from '../services/remote-project-files.js';
 
 const router = express.Router();
 const COMMIT_DIFF_CHARACTER_LIMIT = 500_000;
@@ -46,6 +48,51 @@ function spawnAsync(command, args, options = {}) {
   });
 }
 
+/** @typedef {import('../services/workspace-project-scope.js').WorkspaceProjectCtx} GitWorkspaceCtx */
+
+async function gitSpawn(ctx, gitArgs, cwdOverride) {
+  const cwd = cwdOverride || ctx.projectPath;
+  if (ctx.mode === 'local') {
+    return spawnAsync('git', gitArgs, { cwd });
+  }
+  return remoteGitSpawnAsync(ctx.userId, ctx.serverId, cwd, gitArgs);
+}
+
+function repoAbsPath(ctx, repositoryRootPath, relPath) {
+  const norm = normalizeRepositoryRelativeFilePath(relPath);
+  if (ctx.mode === 'remote') {
+    return path.posix.join(repositoryRootPath, norm);
+  }
+  return path.join(repositoryRootPath, norm);
+}
+
+async function readRepoFileUtf8(ctx, absPath) {
+  if (ctx.mode === 'local') {
+    return fs.readFile(absPath, 'utf-8');
+  }
+  const buf = await readRemoteFileBytes(ctx.userId, ctx.serverId, absPath);
+  return buf.toString('utf8');
+}
+
+async function statRepoPath(ctx, absPath) {
+  if (ctx.mode === 'local') {
+    return fs.stat(absPath);
+  }
+  return remoteStatPath(ctx.userId, ctx.serverId, absPath);
+}
+
+async function removeRepoFileOrDir(ctx, absPath, stats) {
+  if (ctx.mode === 'local') {
+    if (stats.isDirectory()) {
+      await fs.rm(absPath, { recursive: true, force: true });
+    } else {
+      await fs.unlink(absPath);
+    }
+    return;
+  }
+  await remoteDeletePathRecursive(ctx.userId, ctx.serverId, absPath);
+}
+
 // Input validation helpers (defense-in-depth)
 function validateCommitRef(commit) {
   // Allow hex hashes, HEAD, HEAD~N, HEAD^N, tag names, branch names
@@ -85,34 +132,6 @@ function validateRemoteName(remote) {
   return remote;
 }
 
-function validateProjectPath(projectPath) {
-  if (!projectPath || projectPath.includes('\0')) {
-    throw new Error('Invalid project path');
-  }
-  const resolved = path.resolve(projectPath);
-  // Must be an absolute path after resolution
-  if (!path.isAbsolute(resolved)) {
-    throw new Error('Invalid project path: must be absolute');
-  }
-  // Block obviously dangerous paths
-  if (resolved === '/' || resolved === path.sep) {
-    throw new Error('Invalid project path: root directory not allowed');
-  }
-  return resolved;
-}
-
-// Helper function to get the actual project path from the encoded project name
-async function getActualProjectPath(projectName) {
-  let projectPath;
-  try {
-    projectPath = await extractProjectDirectory(projectName);
-  } catch (error) {
-    console.error(`Error extracting project directory for ${projectName}:`, error);
-    throw new Error(`Unable to resolve project path for "${projectName}"`);
-  }
-  return validateProjectPath(projectPath);
-}
-
 // Helper function to strip git diff headers
 function stripDiffHeaders(diff) {
   if (!diff) return '';
@@ -143,24 +162,22 @@ function stripDiffHeaders(diff) {
 }
 
 // Helper function to validate git repository
-async function validateGitRepository(projectPath) {
-  try {
-    // Check if directory exists
-    await fs.access(projectPath);
-  } catch {
-    throw new Error(`Project path not found: ${projectPath}`);
+async function validateGitRepository(ctx) {
+  if (ctx.mode === 'local') {
+    try {
+      await fs.access(ctx.projectPath);
+    } catch {
+      throw new Error(`Project path not found: ${ctx.projectPath}`);
+    }
   }
 
   try {
-    // Allow any directory that is inside a work tree (repo root or nested folder).
-    const { stdout: insideWorkTreeOutput } = await spawnAsync('git', ['rev-parse', '--is-inside-work-tree'], { cwd: projectPath });
+    const { stdout: insideWorkTreeOutput } = await gitSpawn(ctx, ['rev-parse', '--is-inside-work-tree']);
     const isInsideWorkTree = insideWorkTreeOutput.trim() === 'true';
     if (!isInsideWorkTree) {
       throw new Error('Not inside a git work tree');
     }
-
-    // Ensure git can resolve the repository root for this directory.
-    await spawnAsync('git', ['rev-parse', '--show-toplevel'], { cwd: projectPath });
+    await gitSpawn(ctx, ['rev-parse', '--show-toplevel']);
   } catch {
     throw new Error('Not a git repository. This directory does not contain a .git folder. Initialize a git repository with "git init" to use source control features.');
   }
@@ -178,25 +195,24 @@ function isMissingHeadRevisionError(error) {
     || errorDetails.includes('bad revision');
 }
 
-async function getCurrentBranchName(projectPath) {
+async function getCurrentBranchName(ctx) {
   try {
-    // symbolic-ref works even when the repository has no commits.
-    const { stdout } = await spawnAsync('git', ['symbolic-ref', '--short', 'HEAD'], { cwd: projectPath });
+    const { stdout } = await gitSpawn(ctx, ['symbolic-ref', '--short', 'HEAD']);
     const branchName = stdout.trim();
     if (branchName) {
       return branchName;
     }
   } catch (error) {
-    // Fall back to rev-parse for detached HEAD and older git edge cases.
+    /* fall through */
   }
 
-  const { stdout } = await spawnAsync('git', ['rev-parse', '--abbrev-ref', 'HEAD'], { cwd: projectPath });
+  const { stdout } = await gitSpawn(ctx, ['rev-parse', '--abbrev-ref', 'HEAD']);
   return stdout.trim();
 }
 
-async function repositoryHasCommits(projectPath) {
+async function repositoryHasCommits(ctx) {
   try {
-    await spawnAsync('git', ['rev-parse', '--verify', 'HEAD'], { cwd: projectPath });
+    await gitSpawn(ctx, ['rev-parse', '--verify', 'HEAD']);
     return true;
   } catch (error) {
     if (isMissingHeadRevisionError(error)) {
@@ -206,8 +222,8 @@ async function repositoryHasCommits(projectPath) {
   }
 }
 
-async function getRepositoryRootPath(projectPath) {
-  const { stdout } = await spawnAsync('git', ['rev-parse', '--show-toplevel'], { cwd: projectPath });
+async function getRepositoryRootPath(ctx) {
+  const { stdout } = await gitSpawn(ctx, ['rev-parse', '--show-toplevel']);
   return stdout.trim();
 }
 
@@ -232,9 +248,13 @@ function parseStatusFilePaths(statusOutput) {
     .filter(Boolean);
 }
 
-function buildFilePathCandidates(projectPath, repositoryRootPath, filePath) {
+function buildFilePathCandidates(ctx, repositoryRootPath, filePath) {
   const normalizedFilePath = normalizeRepositoryRelativeFilePath(filePath);
-  const projectRelativePath = normalizeRepositoryRelativeFilePath(path.relative(repositoryRootPath, projectPath));
+  const rawRel =
+    ctx.mode === 'remote'
+      ? path.posix.relative(repositoryRootPath, ctx.projectPath)
+      : path.relative(repositoryRootPath, ctx.projectPath);
+  const projectRelativePath = normalizeRepositoryRelativeFilePath(rawRel);
   const candidates = [normalizedFilePath];
 
   if (
@@ -248,14 +268,16 @@ function buildFilePathCandidates(projectPath, repositoryRootPath, filePath) {
   return Array.from(new Set(candidates.filter(Boolean)));
 }
 
-async function resolveRepositoryFilePath(projectPath, filePath) {
-  validateFilePath(filePath);
+async function resolveRepositoryFilePath(ctx, filePath) {
+  if (!filePath || String(filePath).includes('\0')) {
+    throw new Error('Invalid file path');
+  }
 
-  const repositoryRootPath = await getRepositoryRootPath(projectPath);
-  const candidateFilePaths = buildFilePathCandidates(projectPath, repositoryRootPath, filePath);
+  const repositoryRootPath = await getRepositoryRootPath(ctx);
+  const candidateFilePaths = buildFilePathCandidates(ctx, repositoryRootPath, filePath);
 
   for (const candidateFilePath of candidateFilePaths) {
-    const { stdout } = await spawnAsync('git', ['status', '--porcelain', '--', candidateFilePath], { cwd: repositoryRootPath });
+    const { stdout } = await gitSpawn(ctx, ['status', '--porcelain', '--', candidateFilePath], repositoryRootPath);
     if (stdout.trim()) {
       return {
         repositoryRootPath,
@@ -264,10 +286,9 @@ async function resolveRepositoryFilePath(projectPath, filePath) {
     }
   }
 
-  // If the caller sent a bare filename (e.g. "hello.ts"), recover it from changed files.
   const normalizedFilePath = normalizeRepositoryRelativeFilePath(filePath);
   if (!normalizedFilePath.includes('/')) {
-    const { stdout: repositoryStatusOutput } = await spawnAsync('git', ['status', '--porcelain'], { cwd: repositoryRootPath });
+    const { stdout: repositoryStatusOutput } = await gitSpawn(ctx, ['status', '--porcelain'], repositoryRootPath);
     const changedFilePaths = parseStatusFilePaths(repositoryStatusOutput);
     const suffixMatches = changedFilePaths.filter(
       (changedFilePath) => changedFilePath === normalizedFilePath || changedFilePath.endsWith(`/${normalizedFilePath}`),
@@ -296,16 +317,16 @@ router.get('/status', async (req, res) => {
   }
 
   try {
-    const projectPath = await getActualProjectPath(project);
+    const ctx = await resolveWorkspaceProject(req, String(project));
 
     // Validate git repository
-    await validateGitRepository(projectPath);
+    await validateGitRepository(ctx);
 
-    const branch = await getCurrentBranchName(projectPath);
-    const hasCommits = await repositoryHasCommits(projectPath);
+    const branch = await getCurrentBranchName(ctx);
+    const hasCommits = await repositoryHasCommits(ctx);
 
     // Get git status
-    const { stdout: statusOutput } = await spawnAsync('git', ['status', '--porcelain'], { cwd: projectPath });
+    const { stdout: statusOutput } = await gitSpawn(ctx, ['status', '--porcelain']);
 
     const modified = [];
     const added = [];
@@ -359,68 +380,59 @@ router.get('/diff', async (req, res) => {
   }
 
   try {
-    const projectPath = await getActualProjectPath(project);
-    
-    // Validate git repository
-    await validateGitRepository(projectPath);
+    const ctx = await resolveWorkspaceProject(req, String(project));
+
+    await validateGitRepository(ctx);
 
     const {
       repositoryRootPath,
       repositoryRelativeFilePath,
-    } = await resolveRepositoryFilePath(projectPath, file);
+    } = await resolveRepositoryFilePath(ctx, String(file));
 
-    // Check if file is untracked or deleted
-    const { stdout: statusOutput } = await spawnAsync(
-      'git',
+    const { stdout: statusOutput } = await gitSpawn(
+      ctx,
       ['status', '--porcelain', '--', repositoryRelativeFilePath],
-      { cwd: repositoryRootPath },
+      repositoryRootPath,
     );
     const isUntracked = statusOutput.startsWith('??');
     const isDeleted = statusOutput.trim().startsWith('D ') || statusOutput.trim().startsWith(' D');
 
     let diff;
     if (isUntracked) {
-      // For untracked files, show the entire file content as additions
-      const filePath = path.join(repositoryRootPath, repositoryRelativeFilePath);
-      const stats = await fs.stat(filePath);
+      const filePath = repoAbsPath(ctx, repositoryRootPath, repositoryRelativeFilePath);
+      const stats = await statRepoPath(ctx, filePath);
 
       if (stats.isDirectory()) {
-        // For directories, show a simple message
         diff = `Directory: ${repositoryRelativeFilePath}\n(Cannot show diff for directories)`;
       } else {
-        const fileContent = await fs.readFile(filePath, 'utf-8');
+        const fileContent = await readRepoFileUtf8(ctx, filePath);
         const lines = fileContent.split('\n');
         diff = `--- /dev/null\n+++ b/${repositoryRelativeFilePath}\n@@ -0,0 +1,${lines.length} @@\n` +
                lines.map(line => `+${line}`).join('\n');
       }
     } else if (isDeleted) {
-      // For deleted files, show the entire file content from HEAD as deletions
-      const { stdout: fileContent } = await spawnAsync(
-        'git',
+      const { stdout: fileContent } = await gitSpawn(
+        ctx,
         ['show', `HEAD:${repositoryRelativeFilePath}`],
-        { cwd: repositoryRootPath },
+        repositoryRootPath,
       );
       const lines = fileContent.split('\n');
       diff = `--- a/${repositoryRelativeFilePath}\n+++ /dev/null\n@@ -1,${lines.length} +0,0 @@\n` +
              lines.map(line => `-${line}`).join('\n');
     } else {
-      // Get diff for tracked files
-      // First check for unstaged changes (working tree vs index)
-      const { stdout: unstagedDiff } = await spawnAsync(
-        'git',
+      const { stdout: unstagedDiff } = await gitSpawn(
+        ctx,
         ['diff', '--', repositoryRelativeFilePath],
-        { cwd: repositoryRootPath },
+        repositoryRootPath,
       );
 
       if (unstagedDiff) {
-        // Show unstaged changes if they exist
         diff = stripDiffHeaders(unstagedDiff);
       } else {
-        // If no unstaged changes, check for staged changes (index vs HEAD)
-        const { stdout: stagedDiff } = await spawnAsync(
-          'git',
+        const { stdout: stagedDiff } = await gitSpawn(
+          ctx,
           ['diff', '--cached', '--', repositoryRelativeFilePath],
-          { cwd: repositoryRootPath },
+          repositoryRootPath,
         );
         diff = stripDiffHeaders(stagedDiff) || '';
       }
@@ -442,21 +454,19 @@ router.get('/file-with-diff', async (req, res) => {
   }
 
   try {
-    const projectPath = await getActualProjectPath(project);
+    const ctx = await resolveWorkspaceProject(req, String(project));
 
-    // Validate git repository
-    await validateGitRepository(projectPath);
+    await validateGitRepository(ctx);
 
     const {
       repositoryRootPath,
       repositoryRelativeFilePath,
-    } = await resolveRepositoryFilePath(projectPath, file);
+    } = await resolveRepositoryFilePath(ctx, String(file));
 
-    // Check file status
-    const { stdout: statusOutput } = await spawnAsync(
-      'git',
+    const { stdout: statusOutput } = await gitSpawn(
+      ctx,
       ['status', '--porcelain', '--', repositoryRelativeFilePath],
-      { cwd: repositoryRootPath },
+      repositoryRootPath,
     );
     const isUntracked = statusOutput.startsWith('??');
     const isDeleted = statusOutput.trim().startsWith('D ') || statusOutput.trim().startsWith(' D');
@@ -465,37 +475,32 @@ router.get('/file-with-diff', async (req, res) => {
     let oldContent = '';
 
     if (isDeleted) {
-      // For deleted files, get content from HEAD
-      const { stdout: headContent } = await spawnAsync(
-        'git',
+      const { stdout: headContent } = await gitSpawn(
+        ctx,
         ['show', `HEAD:${repositoryRelativeFilePath}`],
-        { cwd: repositoryRootPath },
+        repositoryRootPath,
       );
       oldContent = headContent;
-      currentContent = headContent; // Show the deleted content in editor
+      currentContent = headContent;
     } else {
-      // Get current file content
-      const filePath = path.join(repositoryRootPath, repositoryRelativeFilePath);
-      const stats = await fs.stat(filePath);
+      const filePath = repoAbsPath(ctx, repositoryRootPath, repositoryRelativeFilePath);
+      const stats = await statRepoPath(ctx, filePath);
 
       if (stats.isDirectory()) {
-        // Cannot show content for directories
         return res.status(400).json({ error: 'Cannot show diff for directories' });
       }
 
-      currentContent = await fs.readFile(filePath, 'utf-8');
+      currentContent = await readRepoFileUtf8(ctx, filePath);
 
       if (!isUntracked) {
-        // Get the old content from HEAD for tracked files
         try {
-          const { stdout: headContent } = await spawnAsync(
-            'git',
+          const { stdout: headContent } = await gitSpawn(
+            ctx,
             ['show', `HEAD:${repositoryRelativeFilePath}`],
-            { cwd: repositoryRootPath },
+            repositoryRootPath,
           );
           oldContent = headContent;
         } catch (error) {
-          // File might be newly added to git (staged but not committed)
           oldContent = '';
         }
       }
@@ -522,24 +527,20 @@ router.post('/initial-commit', async (req, res) => {
   }
 
   try {
-    const projectPath = await getActualProjectPath(project);
+    const ctx = await resolveWorkspaceProject(req, String(project));
 
-    // Validate git repository
-    await validateGitRepository(projectPath);
+    await validateGitRepository(ctx);
 
-    // Check if there are already commits
     try {
-      await spawnAsync('git', ['rev-parse', 'HEAD'], { cwd: projectPath });
+      await gitSpawn(ctx, ['rev-parse', 'HEAD']);
       return res.status(400).json({ error: 'Repository already has commits. Use regular commit instead.' });
     } catch (error) {
-      // No HEAD - this is good, we can create initial commit
+      /* no HEAD */
     }
 
-    // Add all files
-    await spawnAsync('git', ['add', '.'], { cwd: projectPath });
+    await gitSpawn(ctx, ['add', '.']);
 
-    // Create initial commit
-    const { stdout } = await spawnAsync('git', ['commit', '-m', 'Initial commit'], { cwd: projectPath });
+    const { stdout } = await gitSpawn(ctx, ['commit', '-m', 'Initial commit']);
 
     res.json({ success: true, output: stdout, message: 'Initial commit created successfully' });
   } catch (error) {
@@ -566,20 +567,17 @@ router.post('/commit', async (req, res) => {
   }
 
   try {
-    const projectPath = await getActualProjectPath(project);
-    
-    // Validate git repository
-    await validateGitRepository(projectPath);
-    const repositoryRootPath = await getRepositoryRootPath(projectPath);
-    
-    // Stage selected files
+    const ctx = await resolveWorkspaceProject(req, String(project));
+
+    await validateGitRepository(ctx);
+    const repositoryRootPath = await getRepositoryRootPath(ctx);
+
     for (const file of files) {
-      const { repositoryRelativeFilePath } = await resolveRepositoryFilePath(projectPath, file);
-      await spawnAsync('git', ['add', '--', repositoryRelativeFilePath], { cwd: repositoryRootPath });
+      const { repositoryRelativeFilePath } = await resolveRepositoryFilePath(ctx, file);
+      await gitSpawn(ctx, ['add', '--', repositoryRelativeFilePath], repositoryRootPath);
     }
 
-    // Commit with message
-    const { stdout } = await spawnAsync('git', ['commit', '-m', message], { cwd: repositoryRootPath });
+    const { stdout } = await gitSpawn(ctx, ['commit', '-m', message], repositoryRootPath);
     
     res.json({ success: true, output: stdout });
   } catch (error) {
@@ -597,11 +595,11 @@ router.post('/revert-local-commit', async (req, res) => {
   }
 
   try {
-    const projectPath = await getActualProjectPath(project);
-    await validateGitRepository(projectPath);
+    const ctx = await resolveWorkspaceProject(req, String(project));
+    await validateGitRepository(ctx);
 
     try {
-      await spawnAsync('git', ['rev-parse', '--verify', 'HEAD'], { cwd: projectPath });
+      await gitSpawn(ctx, ['rev-parse', '--verify', 'HEAD']);
     } catch (error) {
       return res.status(400).json({
         error: 'No local commit to revert',
@@ -610,8 +608,7 @@ router.post('/revert-local-commit', async (req, res) => {
     }
 
     try {
-      // Soft reset rewinds one commit while preserving all file changes in the index.
-      await spawnAsync('git', ['reset', '--soft', 'HEAD~1'], { cwd: projectPath });
+      await gitSpawn(ctx, ['reset', '--soft', 'HEAD~1']);
     } catch (error) {
       const errorDetails = `${error.stderr || ''} ${error.message || ''}`;
       const isInitialCommit = errorDetails.includes('HEAD~1') &&
@@ -621,8 +618,7 @@ router.post('/revert-local-commit', async (req, res) => {
         throw error;
       }
 
-      // Initial commit has no parent; deleting HEAD uncommits it and keeps files staged.
-      await spawnAsync('git', ['update-ref', '-d', 'HEAD'], { cwd: projectPath });
+      await gitSpawn(ctx, ['update-ref', '-d', 'HEAD']);
     }
 
     res.json({
@@ -644,13 +640,11 @@ router.get('/branches', async (req, res) => {
   }
 
   try {
-    const projectPath = await getActualProjectPath(project);
-    
-    // Validate git repository
-    await validateGitRepository(projectPath);
-    
-    // Get all branches
-    const { stdout } = await spawnAsync('git', ['branch', '-a'], { cwd: projectPath });
+    const ctx = await resolveWorkspaceProject(req, String(project));
+
+    await validateGitRepository(ctx);
+
+    const { stdout } = await gitSpawn(ctx, ['branch', '-a']);
 
     const rawLines = stdout
       .split('\n')
@@ -688,12 +682,11 @@ router.post('/checkout', async (req, res) => {
   }
 
   try {
-    const projectPath = await getActualProjectPath(project);
-    
-    // Checkout the branch
+    const ctx = await resolveWorkspaceProject(req, String(project));
+
     validateBranchName(branch);
-    const { stdout } = await spawnAsync('git', ['checkout', branch], { cwd: projectPath });
-    
+    const { stdout } = await gitSpawn(ctx, ['checkout', branch]);
+
     res.json({ success: true, output: stdout });
   } catch (error) {
     console.error('Git checkout error:', error);
@@ -710,12 +703,11 @@ router.post('/create-branch', async (req, res) => {
   }
 
   try {
-    const projectPath = await getActualProjectPath(project);
-    
-    // Create and checkout new branch
+    const ctx = await resolveWorkspaceProject(req, String(project));
+
     validateBranchName(branch);
-    const { stdout } = await spawnAsync('git', ['checkout', '-b', branch], { cwd: projectPath });
-    
+    const { stdout } = await gitSpawn(ctx, ['checkout', '-b', branch]);
+
     res.json({ success: true, output: stdout });
   } catch (error) {
     console.error('Git create branch error:', error);
@@ -732,16 +724,15 @@ router.post('/delete-branch', async (req, res) => {
   }
 
   try {
-    const projectPath = await getActualProjectPath(project);
-    await validateGitRepository(projectPath);
+    const ctx = await resolveWorkspaceProject(req, String(project));
+    await validateGitRepository(ctx);
 
-    // Safety: cannot delete the currently checked-out branch
-    const { stdout: currentBranch } = await spawnAsync('git', ['branch', '--show-current'], { cwd: projectPath });
+    const { stdout: currentBranch } = await gitSpawn(ctx, ['branch', '--show-current']);
     if (currentBranch.trim() === branch) {
       return res.status(400).json({ error: 'Cannot delete the currently checked-out branch' });
     }
 
-    const { stdout } = await spawnAsync('git', ['branch', '-d', branch], { cwd: projectPath });
+    const { stdout } = await gitSpawn(ctx, ['branch', '-d', branch]);
     res.json({ success: true, output: stdout });
   } catch (error) {
     console.error('Git delete branch error:', error);
@@ -758,19 +749,20 @@ router.get('/commits', async (req, res) => {
   }
 
   try {
-    const projectPath = await getActualProjectPath(project);
-    await validateGitRepository(projectPath);
+    const ctx = await resolveWorkspaceProject(req, String(project));
+    await validateGitRepository(ctx);
     const parsedLimit = Number.parseInt(String(limit), 10);
     const safeLimit = Number.isFinite(parsedLimit) && parsedLimit > 0
       ? Math.min(parsedLimit, 100)
       : 10;
-    
-    // Get commit log with stats
-    const { stdout } = await spawnAsync(
-      'git',
-      ['log', '--pretty=format:%H|%an|%ae|%ad|%s', '--date=iso-strict', '-n', String(safeLimit)],
-      { cwd: projectPath },
-    );
+
+    const { stdout } = await gitSpawn(ctx, [
+      'log',
+      '--pretty=format:%H|%an|%ae|%ad|%s',
+      '--date=iso-strict',
+      '-n',
+      String(safeLimit),
+    ]);
     
     const commits = stdout
       .split('\n')
@@ -789,10 +781,7 @@ router.get('/commits', async (req, res) => {
     // Get stats for each commit
     for (const commit of commits) {
       try {
-        const { stdout: stats } = await spawnAsync(
-          'git', ['show', '--stat', '--format=', commit.hash],
-          { cwd: projectPath }
-        );
+        const { stdout: stats } = await gitSpawn(ctx, ['show', '--stat', '--format=', commit.hash]);
         commit.stats = stats.trim().split('\n').pop(); // Get the summary line
       } catch (error) {
         commit.stats = '';
@@ -815,16 +804,11 @@ router.get('/commit-diff', async (req, res) => {
   }
 
   try {
-    const projectPath = await getActualProjectPath(project);
+    const ctx = await resolveWorkspaceProject(req, String(project));
 
-    // Validate commit reference (defense-in-depth)
     validateCommitRef(commit);
 
-    // Get diff for the commit
-    const { stdout } = await spawnAsync(
-      'git', ['show', commit],
-      { cwd: projectPath }
-    );
+    const { stdout } = await gitSpawn(ctx, ['show', commit]);
 
     const isTruncated = stdout.length > COMMIT_DIFF_CHARACTER_LIMIT;
     const diff = isTruncated
@@ -852,18 +836,18 @@ router.post('/generate-commit-message', async (req, res) => {
   }
 
   try {
-    const projectPath = await getActualProjectPath(project);
-    await validateGitRepository(projectPath);
-    const repositoryRootPath = await getRepositoryRootPath(projectPath);
+    const ctx = await resolveWorkspaceProject(req, String(project));
+    await validateGitRepository(ctx);
+    const repositoryRootPath = await getRepositoryRootPath(ctx);
 
-    // Get diff for selected files
     let diffContext = '';
     for (const file of files) {
       try {
-        const { repositoryRelativeFilePath } = await resolveRepositoryFilePath(projectPath, file);
-        const { stdout } = await spawnAsync(
-          'git', ['diff', 'HEAD', '--', repositoryRelativeFilePath],
-          { cwd: repositoryRootPath }
+        const { repositoryRelativeFilePath } = await resolveRepositoryFilePath(ctx, file);
+        const { stdout } = await gitSpawn(
+          ctx,
+          ['diff', 'HEAD', '--', repositoryRelativeFilePath],
+          repositoryRootPath,
         );
         if (stdout) {
           diffContext += `\n--- ${repositoryRelativeFilePath} ---\n${stdout}`;
@@ -873,17 +857,15 @@ router.post('/generate-commit-message', async (req, res) => {
       }
     }
 
-    // If no diff found, might be untracked files
     if (!diffContext.trim()) {
-      // Try to get content of untracked files
       for (const file of files) {
         try {
-          const { repositoryRelativeFilePath } = await resolveRepositoryFilePath(projectPath, file);
-          const filePath = path.join(repositoryRootPath, repositoryRelativeFilePath);
-          const stats = await fs.stat(filePath);
+          const { repositoryRelativeFilePath } = await resolveRepositoryFilePath(ctx, file);
+          const filePath = repoAbsPath(ctx, repositoryRootPath, repositoryRelativeFilePath);
+          const stats = await statRepoPath(ctx, filePath);
 
           if (!stats.isDirectory()) {
-            const content = await fs.readFile(filePath, 'utf-8');
+            const content = await readRepoFileUtf8(ctx, filePath);
             diffContext += `\n--- ${repositoryRelativeFilePath} (new file) ---\n${content.substring(0, 1000)}\n`;
           } else {
             diffContext += `\n--- ${repositoryRelativeFilePath} (new directory) ---\n`;
@@ -894,8 +876,8 @@ router.post('/generate-commit-message', async (req, res) => {
       }
     }
 
-    // Generate commit message using AI
-    const message = await generateCommitMessageWithAI(files, diffContext, provider, projectPath);
+    const aiCwd = ctx.mode === 'local' ? ctx.projectPath : process.cwd();
+    const message = await generateCommitMessageWithAI(files, diffContext, provider, aiCwd);
 
     res.json({ message });
   } catch (error) {
@@ -1052,13 +1034,13 @@ router.get('/remote-status', async (req, res) => {
   }
 
   try {
-    const projectPath = await getActualProjectPath(project);
-    await validateGitRepository(projectPath);
+    const ctx = await resolveWorkspaceProject(req, String(project));
+    await validateGitRepository(ctx);
 
-    const branch = await getCurrentBranchName(projectPath);
-    const hasCommits = await repositoryHasCommits(projectPath);
+    const branch = await getCurrentBranchName(ctx);
+    const hasCommits = await repositoryHasCommits(ctx);
 
-    const { stdout: remoteOutput } = await spawnAsync('git', ['remote'], { cwd: projectPath });
+    const { stdout: remoteOutput } = await gitSpawn(ctx, ['remote']);
     const remotes = remoteOutput.trim().split('\n').filter(r => r.trim());
     const hasRemote = remotes.length > 0;
     const fallbackRemoteName = hasRemote
@@ -1084,7 +1066,7 @@ router.get('/remote-status', async (req, res) => {
     let trackingBranch;
     let remoteName;
     try {
-      const { stdout } = await spawnAsync('git', ['rev-parse', '--abbrev-ref', `${branch}@{upstream}`], { cwd: projectPath });
+      const { stdout } = await gitSpawn(ctx, ['rev-parse', '--abbrev-ref', `${branch}@{upstream}`]);
       trackingBranch = stdout.trim();
       remoteName = trackingBranch.split('/')[0]; // Extract remote name (e.g., "origin/main" -> "origin")
     } catch (error) {
@@ -1097,11 +1079,12 @@ router.get('/remote-status', async (req, res) => {
       });
     }
 
-    // Get ahead/behind counts
-    const { stdout: countOutput } = await spawnAsync(
-      'git', ['rev-list', '--count', '--left-right', `${trackingBranch}...HEAD`],
-      { cwd: projectPath }
-    );
+    const { stdout: countOutput } = await gitSpawn(ctx, [
+      'rev-list',
+      '--count',
+      '--left-right',
+      `${trackingBranch}...HEAD`,
+    ]);
     
     const [behind, ahead] = countOutput.trim().split('\t').map(Number);
 
@@ -1130,23 +1113,21 @@ router.post('/fetch', async (req, res) => {
   }
 
   try {
-    const projectPath = await getActualProjectPath(project);
-    await validateGitRepository(projectPath);
+    const ctx = await resolveWorkspaceProject(req, String(project));
+    await validateGitRepository(ctx);
 
-    // Get current branch and its upstream remote
-    const branch = await getCurrentBranchName(projectPath);
+    const branch = await getCurrentBranchName(ctx);
 
     let remoteName = 'origin'; // fallback
     try {
-      const { stdout } = await spawnAsync('git', ['rev-parse', '--abbrev-ref', `${branch}@{upstream}`], { cwd: projectPath });
+      const { stdout } = await gitSpawn(ctx, ['rev-parse', '--abbrev-ref', `${branch}@{upstream}`]);
       remoteName = stdout.trim().split('/')[0]; // Extract remote name
     } catch (error) {
-      // No upstream, try to fetch from origin anyway
       console.log('No upstream configured, using origin as fallback');
     }
 
     validateRemoteName(remoteName);
-    const { stdout } = await spawnAsync('git', ['fetch', remoteName], { cwd: projectPath });
+    const { stdout } = await gitSpawn(ctx, ['fetch', remoteName]);
 
     res.json({ success: true, output: stdout || 'Fetch completed successfully', remoteName });
   } catch (error) {
@@ -1171,27 +1152,25 @@ router.post('/pull', async (req, res) => {
   }
 
   try {
-    const projectPath = await getActualProjectPath(project);
-    await validateGitRepository(projectPath);
+    const ctx = await resolveWorkspaceProject(req, String(project));
+    await validateGitRepository(ctx);
 
-    // Get current branch and its upstream remote
-    const branch = await getCurrentBranchName(projectPath);
+    const branch = await getCurrentBranchName(ctx);
 
     let remoteName = 'origin'; // fallback
     let remoteBranch = branch; // fallback
     try {
-      const { stdout } = await spawnAsync('git', ['rev-parse', '--abbrev-ref', `${branch}@{upstream}`], { cwd: projectPath });
+      const { stdout } = await gitSpawn(ctx, ['rev-parse', '--abbrev-ref', `${branch}@{upstream}`]);
       const tracking = stdout.trim();
       remoteName = tracking.split('/')[0]; // Extract remote name
       remoteBranch = tracking.split('/').slice(1).join('/'); // Extract branch name
     } catch (error) {
-      // No upstream, use fallback
       console.log('No upstream configured, using origin/branch as fallback');
     }
 
     validateRemoteName(remoteName);
     validateBranchName(remoteBranch);
-    const { stdout } = await spawnAsync('git', ['pull', remoteName, remoteBranch], { cwd: projectPath });
+    const { stdout } = await gitSpawn(ctx, ['pull', remoteName, remoteBranch]);
 
     res.json({
       success: true,
@@ -1239,27 +1218,25 @@ router.post('/push', async (req, res) => {
   }
 
   try {
-    const projectPath = await getActualProjectPath(project);
-    await validateGitRepository(projectPath);
+    const ctx = await resolveWorkspaceProject(req, String(project));
+    await validateGitRepository(ctx);
 
-    // Get current branch and its upstream remote
-    const branch = await getCurrentBranchName(projectPath);
+    const branch = await getCurrentBranchName(ctx);
 
     let remoteName = 'origin'; // fallback
     let remoteBranch = branch; // fallback
     try {
-      const { stdout } = await spawnAsync('git', ['rev-parse', '--abbrev-ref', `${branch}@{upstream}`], { cwd: projectPath });
+      const { stdout } = await gitSpawn(ctx, ['rev-parse', '--abbrev-ref', `${branch}@{upstream}`]);
       const tracking = stdout.trim();
       remoteName = tracking.split('/')[0]; // Extract remote name
       remoteBranch = tracking.split('/').slice(1).join('/'); // Extract branch name
     } catch (error) {
-      // No upstream, use fallback
       console.log('No upstream configured, using origin/branch as fallback');
     }
 
     validateRemoteName(remoteName);
     validateBranchName(remoteBranch);
-    const { stdout } = await spawnAsync('git', ['push', remoteName, remoteBranch], { cwd: projectPath });
+    const { stdout } = await gitSpawn(ctx, ['push', remoteName, remoteBranch]);
 
     res.json({
       success: true,
@@ -1310,14 +1287,12 @@ router.post('/publish', async (req, res) => {
   }
 
   try {
-    const projectPath = await getActualProjectPath(project);
-    await validateGitRepository(projectPath);
+    const ctx = await resolveWorkspaceProject(req, String(project));
+    await validateGitRepository(ctx);
 
-    // Validate branch name
     validateBranchName(branch);
 
-    // Get current branch to verify it matches the requested branch
-    const currentBranchName = await getCurrentBranchName(projectPath);
+    const currentBranchName = await getCurrentBranchName(ctx);
 
     if (currentBranchName !== branch) {
       return res.status(400).json({
@@ -1325,10 +1300,9 @@ router.post('/publish', async (req, res) => {
       });
     }
 
-    // Check if remote exists
     let remoteName = 'origin';
     try {
-      const { stdout } = await spawnAsync('git', ['remote'], { cwd: projectPath });
+      const { stdout } = await gitSpawn(ctx, ['remote']);
       const remotes = stdout.trim().split('\n').filter(r => r.trim());
       if (remotes.length === 0) {
         return res.status(400).json({
@@ -1342,9 +1316,8 @@ router.post('/publish', async (req, res) => {
       });
     }
 
-    // Publish the branch (set upstream and push)
     validateRemoteName(remoteName);
-    const { stdout } = await spawnAsync('git', ['push', '--set-upstream', remoteName, branch], { cwd: projectPath });
+    const { stdout } = await gitSpawn(ctx, ['push', '--set-upstream', remoteName, branch]);
     
     res.json({ 
       success: true, 
@@ -1389,18 +1362,17 @@ router.post('/discard', async (req, res) => {
   }
 
   try {
-    const projectPath = await getActualProjectPath(project);
-    await validateGitRepository(projectPath);
+    const ctx = await resolveWorkspaceProject(req, String(project));
+    await validateGitRepository(ctx);
     const {
       repositoryRootPath,
       repositoryRelativeFilePath,
-    } = await resolveRepositoryFilePath(projectPath, file);
+    } = await resolveRepositoryFilePath(ctx, file);
 
-    // Check file status to determine correct discard command
-    const { stdout: statusOutput } = await spawnAsync(
-      'git',
+    const { stdout: statusOutput } = await gitSpawn(
+      ctx,
       ['status', '--porcelain', '--', repositoryRelativeFilePath],
-      { cwd: repositoryRootPath },
+      repositoryRootPath,
     );
 
     if (!statusOutput.trim()) {
@@ -1410,21 +1382,13 @@ router.post('/discard', async (req, res) => {
     const status = statusOutput.substring(0, 2);
 
     if (status === '??') {
-      // Untracked file or directory - delete it
-      const filePath = path.join(repositoryRootPath, repositoryRelativeFilePath);
-      const stats = await fs.stat(filePath);
-
-      if (stats.isDirectory()) {
-        await fs.rm(filePath, { recursive: true, force: true });
-      } else {
-        await fs.unlink(filePath);
-      }
+      const filePath = repoAbsPath(ctx, repositoryRootPath, repositoryRelativeFilePath);
+      const stats = await statRepoPath(ctx, filePath);
+      await removeRepoFileOrDir(ctx, filePath, stats);
     } else if (status.includes('M') || status.includes('D')) {
-      // Modified or deleted file - restore from HEAD
-      await spawnAsync('git', ['restore', '--', repositoryRelativeFilePath], { cwd: repositoryRootPath });
+      await gitSpawn(ctx, ['restore', '--', repositoryRelativeFilePath], repositoryRootPath);
     } else if (status.includes('A')) {
-      // Added file - unstage it
-      await spawnAsync('git', ['reset', 'HEAD', '--', repositoryRelativeFilePath], { cwd: repositoryRootPath });
+      await gitSpawn(ctx, ['reset', 'HEAD', '--', repositoryRelativeFilePath], repositoryRootPath);
     }
     
     res.json({ success: true, message: `Changes discarded for ${repositoryRelativeFilePath}` });
@@ -1443,40 +1407,37 @@ router.post('/delete-untracked', async (req, res) => {
   }
 
   try {
-    const projectPath = await getActualProjectPath(project);
-    await validateGitRepository(projectPath);
+    const ctx = await resolveWorkspaceProject(req, String(project));
+    await validateGitRepository(ctx);
     const {
       repositoryRootPath,
       repositoryRelativeFilePath,
-    } = await resolveRepositoryFilePath(projectPath, file);
+    } = await resolveRepositoryFilePath(ctx, file);
 
-    // Check if file is actually untracked
-    const { stdout: statusOutput } = await spawnAsync(
-      'git',
+    const { stdout: statusOutput } = await gitSpawn(
+      ctx,
       ['status', '--porcelain', '--', repositoryRelativeFilePath],
-      { cwd: repositoryRootPath },
+      repositoryRootPath,
     );
-    
+
     if (!statusOutput.trim()) {
       return res.status(400).json({ error: 'File is not untracked or does not exist' });
     }
 
     const status = statusOutput.substring(0, 2);
-    
+
     if (status !== '??') {
       return res.status(400).json({ error: 'File is not untracked. Use discard for tracked files.' });
     }
 
-    // Delete the untracked file or directory
-    const filePath = path.join(repositoryRootPath, repositoryRelativeFilePath);
-    const stats = await fs.stat(filePath);
+    const filePath = repoAbsPath(ctx, repositoryRootPath, repositoryRelativeFilePath);
+    const stats = await statRepoPath(ctx, filePath);
 
     if (stats.isDirectory()) {
-      // Use rm with recursive option for directories
-      await fs.rm(filePath, { recursive: true, force: true });
+      await removeRepoFileOrDir(ctx, filePath, stats);
       res.json({ success: true, message: `Untracked directory ${repositoryRelativeFilePath} deleted successfully` });
     } else {
-      await fs.unlink(filePath);
+      await removeRepoFileOrDir(ctx, filePath, stats);
       res.json({ success: true, message: `Untracked file ${repositoryRelativeFilePath} deleted successfully` });
     }
   } catch (error) {

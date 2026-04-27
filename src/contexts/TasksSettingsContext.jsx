@@ -1,6 +1,7 @@
 import React, { createContext, useContext, useState, useEffect } from 'react';
 import { api } from '../utils/api';
 import { AUTH_TOKEN_STORAGE_KEY } from '../components/auth/constants';
+import { useEnvironment } from './EnvironmentContext';
 
 const TasksSettingsContext = createContext({
   tasksEnabled: true,
@@ -21,6 +22,8 @@ export const useTasksSettings = () => {
 };
 
 export const TasksSettingsProvider = ({ children }) => {
+  const { targetKey } = useEnvironment();
+
   const [tasksEnabled, setTasksEnabled] = useState(() => {
     // Load from localStorage on initialization
     const saved = localStorage.getItem('tasks-enabled');
@@ -37,7 +40,7 @@ export const TasksSettingsProvider = ({ children }) => {
     localStorage.setItem('tasks-enabled', JSON.stringify(tasksEnabled));
   }, [tasksEnabled]);
 
-  // Check TaskMaster installation status asynchronously on component mount
+  // 随当前目标（本机 / remote:id）重新探测：安装态与 Web 终端是否带 PATH 无关，此前仅 mount 一次会切远端后仍显示本机结果。
   useEffect(() => {
     const checkInstallation = async () => {
       // Skip if no auth token - user is not logged in
@@ -48,6 +51,8 @@ export const TasksSettingsProvider = ({ children }) => {
         setIsCheckingInstallation(false);
         return;
       }
+
+      setIsCheckingInstallation(true);
 
       try {
         const response = await api.get('/taskmaster/installation-status');
@@ -79,9 +84,8 @@ export const TasksSettingsProvider = ({ children }) => {
       }
     };
 
-    // Run check asynchronously without blocking initial render
-    setTimeout(checkInstallation, 0);
-  }, []);
+    void checkInstallation();
+  }, [targetKey]);
 
   const toggleTasksEnabled = () => {
     setTasksEnabled(prev => !prev);

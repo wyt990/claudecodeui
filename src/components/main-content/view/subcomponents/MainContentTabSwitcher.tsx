@@ -45,8 +45,8 @@ const TASKS_TAB: BuiltInTab = {
   icon: ClipboardCheck,
 };
 
-/** 远程下已接 API/WebSocket 的 Tab；其余（Git/任务/插件等）仍走本机逻辑，暂灰显 */
-const REMOTE_WORKSPACE_ALLOWED_TAB_IDS = new Set<AppTab>(['chat', 'preview', 'shell', 'files']);
+/** 远程下已接 API/WebSocket 的 Tab；插件等仍灰显 */
+const REMOTE_WORKSPACE_ALLOWED_TAB_IDS = new Set<AppTab>(['chat', 'preview', 'shell', 'files', 'git', 'tasks']);
 
 function isTabBlockedByRemoteMode(tab: TabDefinition, isRemoteTarget: boolean): boolean {
   if (!isRemoteTarget) {

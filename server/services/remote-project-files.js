@@ -739,3 +739,43 @@ export async function remoteUploadFromLocalTemp(
     return uploaded;
   });
 }
+
+/**
+ * SFTP stat 远端绝对路径（POSIX）。
+ * @param {number} userId
+ * @param {number} serverId
+ * @param {string} absPosixPath
+ * @returns {Promise<import('ssh2').sftp.Stats>}
+ */
+export async function remoteStatPath(userId, serverId, absPosixPath) {
+  return withRemoteSsh(userId, serverId, async ({ sftp }) => sftpStat(sftp, absPosixPath));
+}
+
+/**
+ * 递归删除远端文件或目录。调用方须保证路径已校验在允许范围内。
+ * @param {number} userId
+ * @param {number} serverId
+ * @param {string} absPosixPath
+ * @returns {Promise<void>}
+ */
+export async function remoteDeletePathRecursive(userId, serverId, absPosixPath) {
+  return withRemoteSsh(userId, serverId, async ({ sftp }) => {
+    await rmRecursiveSftp(sftp, absPosixPath);
+  });
+}
+
+/**
+ * 列出远端目录下一层文件名（不含 `.` / `..`）。
+ * @param {number} userId
+ * @param {number} serverId
+ * @param {string} dirPosix
+ * @returns {Promise<string[]>}
+ */
+export async function remoteReaddirBasenames(userId, serverId, dirPosix) {
+  return withRemoteSsh(userId, serverId, async ({ sftp }) => {
+    const list = await new Promise((resolve, reject) => {
+      sftp.readdir(dirPosix, (e, l) => (e ? reject(e) : resolve(l || [])));
+    });
+    return list.map((de) => de.filename).filter((n) => n && n !== '.' && n !== '..');
+  });
+}

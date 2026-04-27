@@ -63,7 +63,8 @@ function MainContent({
   const { currentProject, setCurrentProject } = useTaskMaster() as TaskMasterContextValue;
   const { tasksEnabled, isTaskMasterInstalled } = useTasksSettings() as TasksSettingsContextValue;
 
-  const shouldShowTasksTab = Boolean(tasksEnabled && isTaskMasterInstalled);
+  // 本地：仍以「已安装 task-master CLI」为准。远程：可无 CLI（仅读 tasks.json / PRD），不应因 installation-status 为 false 隐藏标签。
+  const shouldShowTasksTab = Boolean(tasksEnabled && (isRemote || isTaskMasterInstalled));
 
   const {
     editingFile,
@@ -150,7 +151,7 @@ function MainContent({
     if (!isRemoteWithProject) {
       return;
     }
-    const allowedWhenRemote = new Set<AppTab>(['chat', 'preview', 'shell', 'files']);
+    const allowedWhenRemote = new Set<AppTab>(['chat', 'preview', 'shell', 'files', 'git', 'tasks']);
     if (!allowedWhenRemote.has(activeTab)) {
       setActiveTab('chat');
     }

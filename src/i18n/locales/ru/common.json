@@ -103,7 +103,7 @@
     "tabBlockedTasks": "Задачи привязаны к TaskMaster на хосте (SSH не поддержан).",
     "tabBlockedPlugin": "Плагин ещё не подключён к удалённому SSH.",
     "mainWorkspaceTitle": "Remote workspace: {{name}}",
-    "mainWorkspaceBody": "Чат, файлы и терминал используют выбранный SSH-сервер. Git, задачи и часть плагинов — позже."
+    "mainWorkspaceBody": "Чат, файлы, терминал, Git и задачи используют выбранный SSH-сервер. Часть плагинов пока без удалённой поддержки."
   },
   "fileTree": {
     "loading": "Загрузка файлов...",

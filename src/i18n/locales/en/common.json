@@ -99,11 +99,11 @@
   },
   "remoteTarget": {
     "tabDisabled": "Not available in this remote workspace yet.",
-    "tabBlockedGit": "Git panel still runs on the app host, not over SSH (not implemented).",
-    "tabBlockedTasks": "Tasks still use the host TaskMaster path (not implemented for SSH).",
+    "tabBlockedGit": "Git is not available for this target.",
+    "tabBlockedTasks": "Tasks are not available for this target.",
     "tabBlockedPlugin": "This plugin is not wired to the remote SSH workspace yet.",
     "mainWorkspaceTitle": "Remote workspace: {{name}}",
-    "mainWorkspaceBody": "Chat, Files, and Terminal use the SSH server you selected. Git, Tasks, and some plugins still need remote wiring."
+    "mainWorkspaceBody": "Chat, Files, Terminal, Git, and Tasks use the SSH server you selected. Some plugins remain local or not wired for remote."
   },
   "fileTree": {
     "loading": "Loading files...",

@@ -99,11 +99,11 @@
   },
   "remoteTarget": {
     "tabDisabled": "在当前远程工作区下暂不可用。",
-    "tabBlockedGit": "源代码管理仍走应用宿主机上的仓库，尚未通过 SSH 在远端执行 Git（未实现）。",
-    "tabBlockedTasks": "任务仍依赖宿主机的 TaskMaster 路径，远程 SSH 尚未接入。",
+    "tabBlockedGit": "当前目标下源代码管理不可用。",
+    "tabBlockedTasks": "当前目标下任务不可用。",
     "tabBlockedPlugin": "该插件尚未接入远程 SSH 工作区。",
     "mainWorkspaceTitle": "远程工作区：{{name}}",
-    "mainWorkspaceBody": "聊天、文件与终端已使用所选 SSH 服务器；源代码管理、任务及部分插件仍需后续对接。"
+    "mainWorkspaceBody": "聊天、文件、终端、源代码管理与任务已使用所选 SSH 服务器；部分插件仍为本地或未对接。"
   },
   "fileTree": {
     "loading": "正在加载文件...",

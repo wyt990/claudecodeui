@@ -99,11 +99,11 @@
   },
   "remoteTarget": {
     "tabDisabled": "このリモートワークスペースではまだ利用できません。",
-    "tabBlockedGit": "Git はアプリ実行ホスト上のみ（SSH 経由は未実装）。",
-    "tabBlockedTasks": "タスクはホストの TaskMaster パス前提（SSH 未対応）。",
+    "tabBlockedGit": "このターゲットでは Git を利用できません。",
+    "tabBlockedTasks": "このターゲットではタスクを利用できません。",
     "tabBlockedPlugin": "このプラグインはリモート SSH に未接続です。",
     "mainWorkspaceTitle": "Remote workspace: {{name}}",
-    "mainWorkspaceBody": "チャット・ファイル・ターミナルは選択中の SSH を使用。Git・タスク・一部プラグインは今後対応予定です。"
+    "mainWorkspaceBody": "チャット・ファイル・ターミナル・Git・タスクは選択中の SSH を使用。一部プラグインは未対応です。"
   },
   "fileTree": {
     "loading": "ファイルを読み込んでいます...",

@@ -12,6 +12,7 @@ import {
   buildRemoteProjectRootStatProbeList,
   harvestAbsolutePathStringsFromValue,
 } from '../utils/claude-jsonl-cwd.js';
+import { detectTaskMasterFolderRemote } from '../services/taskmaster-detect-folder-remote.js';
 
 const MAX_FILE_BYTES = 8 * 1024 * 1024;
 const CLAUDE_PROJECTS_REL = path.posix.join('.claude', 'projects');
@@ -289,7 +290,7 @@ export async function getRemoteClaudeProjectList(userId, serverId) {
       }
 
       const displayName = projectPath.split('/').filter(Boolean).pop() || name;
-      out.push({
+      const proj = {
         name,
         path: projectPath,
         fullPath: projectPath,
@@ -304,7 +305,25 @@ export async function getRemoteClaudeProjectList(userId, serverId) {
         targetKey: `remote:${serverId}`,
         serverId,
         __cloudcliRemote: true,
-      });
+      };
+      try {
+        const tm = await detectTaskMasterFolderRemote(userId, serverId, projectPath);
+        proj.taskmaster = {
+          hasTaskmaster: tm.hasTaskmaster,
+          hasEssentialFiles: Boolean(tm.hasEssentialFiles),
+          metadata: tm.metadata ?? null,
+          status: tm.hasTaskmaster && tm.hasEssentialFiles ? 'configured' : 'not-configured',
+        };
+      } catch (e) {
+        console.warn(`[remote-claude-data] TaskMaster detect failed for ${name}:`, e && e.message ? e.message : e);
+        proj.taskmaster = {
+          hasTaskmaster: false,
+          hasEssentialFiles: false,
+          metadata: null,
+          status: 'error',
+        };
+      }
+      out.push(proj);
     }
     for (const proj of out) {
       const sr = await getRemoteClaudeSessionsInternal(sftp, home, proj.name, 5, 0);
