@@ -18,6 +18,25 @@ const MAX_FILE_BYTES = 8 * 1024 * 1024;
 const CLAUDE_PROJECTS_REL = path.posix.join('.claude', 'projects');
 
 /**
+ * 远端会话 token-usage 读取日志。默认开启（未设置环境变量即打日志）；`CLOUDCLI_LOG_REMOTE_TOKEN_USAGE=0` / `false` / `off` 关闭。
+ * 设为 `1` / `true` / `on` 与未设置相同，均为开启。
+ * @param {string} message
+ * @param {Record<string, unknown>} [meta]
+ */
+function logRemoteSessionTokenUsage(message, meta = {}) {
+  const v = (process.env.CLOUDCLI_LOG_REMOTE_TOKEN_USAGE || '').trim().toLowerCase();
+  if (v === '0' || v === 'false' || v === 'off') {
+    return;
+  }
+  try {
+    const tail = Object.keys(meta).length ? ` ${JSON.stringify(meta)}` : '';
+    console.log(`[remote-claude-data token-usage] ${message}${tail}`);
+  } catch {
+    /* ignore */
+  }
+}
+
+/**
  * 与本地 `extractProjectDirectory` 一致：遍历目录下所有非 agent 的 .jsonl，聚合 `cwd`。
  * 仅用「首个 jsonl 前几行」会漏掉 cwd 或选错文件，回退到 `replace(/-/g,'/')` 会把 `AI-NovelGenerator` 拆错。
  *
@@ -653,4 +672,179 @@ export async function deleteRemoteClaudeSession(userId, serverId, projectName, s
     /** @type {any} */ (err).code = 'REMOTE_SESSION_NOT_FOUND';
     throw err;
   });
+}
+
+/**
+ * 从远端 ~/.claude/projects/{projectName}/{sessionId}.jsonl 解析用量（与 server/index.js 本地 Claude 分支一致：最后一条带 `message.usage` 的 assistant）。
+ * 超大文件只解析末尾一段，避免一次性读满内存。
+ *
+ * @param {number} userId
+ * @param {number} serverId
+ * @param {string} projectName API 项目名（远端 ~/.claude/projects 下目录名）
+ * @param {string} safeSessionId 已校验的会话 id
+ * @returns {Promise<{ found: boolean, used: number, breakdown: { input: number, cacheCreation: number, cacheRead: number }, message?: string }>}
+ */
+export async function getRemoteClaudeSessionTokenUsage(userId, serverId, projectName, safeSessionId) {
+  try {
+    return await withRemoteSsh(userId, serverId, async ({ sftp, home }) => {
+    const pdir = path.posix.join(home, CLAUDE_PROJECTS_REL, projectName);
+    const primaryPath = path.posix.join(pdir, `${safeSessionId}.jsonl`);
+
+    logRemoteSessionTokenUsage('start', {
+      userId,
+      serverId,
+      projectName,
+      safeSessionId,
+      primaryPath,
+    });
+
+    /** @type {Buffer | null} */
+    let buf = await new Promise((resolve, reject) => {
+      sftp.readFile(primaryPath, (e, b) => {
+        if (e) {
+          if (e.code === 2 || e.code === 'ENOENT') {
+            resolve(null);
+            return;
+          }
+          reject(e);
+          return;
+        }
+        resolve(b && Buffer.isBuffer(b) && b.length ? b : null);
+      });
+    });
+
+    /** @type {string} */
+    let resolvedFile = primaryPath;
+
+    if (!buf) {
+      logRemoteSessionTokenUsage('primary-miss', { primaryPath });
+      const fileList = await new Promise((resolve, reject) => {
+        sftp.readdir(pdir, (e2, list) => {
+          if (e2) {
+            if (e2.code === 2 || e2.code === 'ENOENT') {
+              resolve([]);
+              return;
+            }
+            reject(e2);
+            return;
+          }
+          resolve(list || []);
+        });
+      });
+      const names = fileList
+        .map((f) => f.filename)
+        .filter(
+          (fn) =>
+            fn && fn.endsWith('.jsonl') && !fn.startsWith('agent-') && String(fn).includes(safeSessionId),
+        );
+      logRemoteSessionTokenUsage('fallback-scan', { pdir, candidateCount: names.length, sample: names.slice(0, 8) });
+      for (const fn of names) {
+        const fp = path.posix.join(pdir, fn);
+        // eslint-disable-next-line no-await-in-loop
+        const b = await new Promise((resolve) => {
+          sftp.readFile(fp, (e, b2) => {
+            if (e) {
+              resolve(null);
+              return;
+            }
+            resolve(Buffer.isBuffer(b2) && b2.length ? b2 : null);
+          });
+        });
+        if (b) {
+          buf = b;
+          resolvedFile = fp;
+          break;
+        }
+      }
+    }
+
+    if (!buf || !buf.length) {
+      logRemoteSessionTokenUsage('not-found', {
+        userId,
+        serverId,
+        projectName,
+        safeSessionId,
+        primaryPath,
+        resolvedFile,
+      });
+      return {
+        found: false,
+        used: 0,
+        breakdown: { input: 0, cacheCreation: 0, cacheRead: 0 },
+        message: 'Session transcript not found on remote for this project/session.',
+      };
+    }
+
+    const truncatedParse = buf.length > MAX_FILE_BYTES;
+    let text = buf.toString('utf8');
+    if (truncatedParse) {
+      const tail = buf.subarray(buf.length - MAX_FILE_BYTES).toString('utf8');
+      const nl = tail.indexOf('\n');
+      text = nl >= 0 ? tail.slice(nl + 1) : tail;
+    }
+
+    const lines = text.trim().split('\n');
+    let inputTokens = 0;
+    let cacheCreationTokens = 0;
+    let cacheReadTokens = 0;
+    let hitAssistantUsage = false;
+    for (let i = lines.length - 1; i >= 0; i -= 1) {
+      try {
+        const entry = JSON.parse(lines[i]);
+        if (entry.type === 'assistant' && entry.message?.usage) {
+          const usage = entry.message.usage;
+          inputTokens = usage.input_tokens || 0;
+          cacheCreationTokens = usage.cache_creation_input_tokens || 0;
+          cacheReadTokens = usage.cache_read_input_tokens || 0;
+          hitAssistantUsage = true;
+          break;
+        }
+      } catch {
+        /* skip line */
+      }
+    }
+
+    const used = inputTokens + cacheCreationTokens + cacheReadTokens;
+    logRemoteSessionTokenUsage('ok', {
+      userId,
+      serverId,
+      projectName,
+      safeSessionId,
+      resolvedFile,
+      bytes: buf.length,
+      truncatedParse,
+      parsedLineCount: lines.length,
+      hitAssistantUsage,
+      used,
+      breakdown: { input: inputTokens, cacheCreation: cacheCreationTokens, cacheRead: cacheReadTokens },
+    });
+    if (!hitAssistantUsage) {
+      logRemoteSessionTokenUsage('hint-no-usage-in-parsed-range', {
+        resolvedFile,
+        truncatedParse,
+        note: 'No assistant message with message.usage in scanned lines; file may use another schema or usage only in earlier bytes.',
+      });
+    }
+
+    return {
+      found: true,
+      used,
+      breakdown: {
+        input: inputTokens,
+        cacheCreation: cacheCreationTokens,
+        cacheRead: cacheReadTokens,
+      },
+    };
+    });
+  } catch (e) {
+    logRemoteSessionTokenUsage('error', {
+      userId,
+      serverId,
+      projectName,
+      safeSessionId,
+      message: e && /** @type {any} */ (e).message ? String(/** @type {any} */ (e).message) : String(e),
+      code: e && /** @type {any} */ (e).code != null ? /** @type {any} */ (e).code : undefined,
+    });
+    throw e;
+  }
 }

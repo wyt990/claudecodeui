@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import ReactDOM from 'react-dom';
 import type { TFunction } from 'i18next';
-import { Loader2, X } from 'lucide-react';
+import { ChevronDown, ChevronRight, Loader2, X } from 'lucide-react';
 import { api } from '../../../../utils/api';
 import { Button, Input } from '../../../../shared/view/ui';
 
@@ -19,6 +19,8 @@ type Prefs = {
   selectedEntryIds: number[];
   openaiCompat: boolean;
   zenFreeModels: boolean;
+  isSandbox: boolean;
+  remoteAllowedTools: string[];
 };
 
 type PickerModel = { id: string; label: string };
@@ -33,6 +35,8 @@ type LogLine = {
   ok: boolean;
 };
 
+type TabId = 'model' | 'system';
+
 type Props = {
   open: boolean;
   onOpenChange: (o: boolean) => void;
@@ -40,13 +44,32 @@ type Props = {
   serverName: string;
   vaultConfigured: boolean;
   t: TFunction;
+  /** 从聊天「打开设置」跳转时设为 system */
+  initialTab?: 'model' | 'system';
 };
 
-export default function RemoteClaudeProviderSettingsModal({ open, onOpenChange, serverId, serverName, vaultConfigured, t }: Props) {
+export default function RemoteClaudeProviderSettingsModal({
+  open,
+  onOpenChange,
+  serverId,
+  serverName,
+  vaultConfigured,
+  t,
+  initialTab = 'model',
+}: Props) {
+  const [activeTab, setActiveTab] = useState<TabId>('model');
   const [rows, setRows] = useState<Row[]>([]);
   const [loadBusy, setLoadBusy] = useState(false);
-  const [prefs, setPrefs] = useState<Prefs>({ selectedEntryIds: [], openaiCompat: true, zenFreeModels: false });
-  const [applyBusy, setApplyBusy] = useState(false);
+  const [prefs, setPrefs] = useState<Prefs>({
+    selectedEntryIds: [],
+    openaiCompat: true,
+    zenFreeModels: false,
+    isSandbox: false,
+    remoteAllowedTools: [],
+  });
+  const [applyModelBusy, setApplyModelBusy] = useState(false);
+  const [applySystemBusy, setApplySystemBusy] = useState(false);
+  const [toolDraft, setToolDraft] = useState('');
   const [lastLog, setLastLog] = useState<LogLine[] | null>(null);
   const [msg, setMsg] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
@@ -56,6 +79,8 @@ export default function RemoteClaudeProviderSettingsModal({ open, onOpenChange, 
   const [formModels, setFormModels] = useState('');
   const [formKey, setFormKey] = useState('');
   const [saveBusy, setSaveBusy] = useState(false);
+  /** 添加/编辑表单默认收起，避免遮挡表格阅读 */
+  const [formPanelOpen, setFormPanelOpen] = useState(false);
 
   const [rmModels, setRmModels] = useState<PickerModel[]>([]);
   const [listParseInfo, setListParseInfo] = useState<string | null>(null);
@@ -72,11 +97,15 @@ export default function RemoteClaudeProviderSettingsModal({ open, onOpenChange, 
         setRows((await cr.json()) as Row[]);
       }
       if (pr.ok) {
-        const p = (await pr.json()) as Prefs;
+        const p = (await pr.json()) as Partial<Prefs> & { remoteAllowedTools?: string[] };
         setPrefs({
           selectedEntryIds: Array.isArray(p.selectedEntryIds) ? p.selectedEntryIds : [],
           openaiCompat: p.openaiCompat !== false,
           zenFreeModels: Boolean(p.zenFreeModels),
+          isSandbox: Boolean(p.isSandbox),
+          remoteAllowedTools: Array.isArray(p.remoteAllowedTools)
+            ? p.remoteAllowedTools.map((x) => String(x).trim()).filter(Boolean)
+            : [],
         });
       }
     } catch (e) {
@@ -96,11 +125,14 @@ export default function RemoteClaudeProviderSettingsModal({ open, onOpenChange, 
       setFormModels('');
       setFormKey('');
       setEditingId(null);
+      setFormPanelOpen(false);
       setRmModels([]);
       setListParseInfo(null);
       setRmDefaultId(null);
+      setActiveTab(initialTab === 'system' ? 'system' : 'model');
+      setToolDraft('');
     }
-  }, [open, loadAll]);
+  }, [open, loadAll, initialTab]);
 
   const fetchRemoteModels = useCallback(async () => {
     if (!vaultConfigured) {
@@ -188,6 +220,16 @@ export default function RemoteClaudeProviderSettingsModal({ open, onOpenChange, 
     setFormBase(r.baseUrl);
     setFormModels(r.models);
     setFormKey('');
+    setFormPanelOpen(true);
+  };
+
+  const collapseAndClearForm = () => {
+    setEditingId(null);
+    setFormCh('');
+    setFormBase('');
+    setFormModels('');
+    setFormKey('');
+    setFormPanelOpen(false);
   };
 
   const onSaveForm = async () => {
@@ -212,6 +254,7 @@ export default function RemoteClaudeProviderSettingsModal({ open, onOpenChange, 
         setFormBase('');
         setFormModels('');
         setFormKey('');
+        setFormPanelOpen(false);
       } else {
         if (!formKey.trim()) {
           setErr(t('sshServers.claudeProviderKeyRequired'));
@@ -233,6 +276,7 @@ export default function RemoteClaudeProviderSettingsModal({ open, onOpenChange, 
         setFormBase('');
         setFormModels('');
         setFormKey('');
+        setFormPanelOpen(false);
       }
       void loadAll();
     } catch (e) {
@@ -256,13 +300,14 @@ export default function RemoteClaudeProviderSettingsModal({ open, onOpenChange, 
     }
   };
 
-  const onApply = async () => {
-    setApplyBusy(true);
+  const onApplyModel = async () => {
+    setApplyModelBusy(true);
     setErr(null);
     setMsg(null);
     setLastLog(null);
     try {
       const res = await api.sshServers.applyClaudeProviders(serverId, {
+        scope: 'model',
         selectedEntryIds: prefs.selectedEntryIds,
         openaiCompat: prefs.openaiCompat,
         zenFreeModels: prefs.zenFreeModels,
@@ -289,7 +334,62 @@ export default function RemoteClaudeProviderSettingsModal({ open, onOpenChange, 
     } catch (e) {
       setErr(e instanceof Error ? e.message : 'error');
     } finally {
-      setApplyBusy(false);
+      setApplyModelBusy(false);
+    }
+  };
+
+  const addToolEntry = () => {
+    const s = toolDraft.trim();
+    if (!s) {
+      return;
+    }
+    setPrefs((p) => {
+      if (p.remoteAllowedTools.includes(s)) {
+        return p;
+      }
+      return { ...p, remoteAllowedTools: [...p.remoteAllowedTools, s] };
+    });
+    setToolDraft('');
+  };
+
+  const removeToolEntry = (entry: string) => {
+    setPrefs((p) => ({ ...p, remoteAllowedTools: p.remoteAllowedTools.filter((x) => x !== entry) }));
+  };
+
+  const onApplySystem = async () => {
+    setApplySystemBusy(true);
+    setErr(null);
+    setMsg(null);
+    setLastLog(null);
+    try {
+      const res = await api.sshServers.applyClaudeProviders(serverId, {
+        scope: 'system',
+        isSandbox: prefs.isSandbox,
+        remoteAllowedTools: prefs.remoteAllowedTools,
+        runEnvExport: true,
+        persist: true,
+      });
+      const j = (await res.json().catch(() => ({}))) as {
+        error?: string;
+        log?: LogLine[];
+        message?: string;
+        ok?: boolean;
+      };
+      if (!res.ok) {
+        if (j.log && j.log.length) {
+          setLastLog(j.log);
+        }
+        setErr(j.error || t('sshServers.claudeProviderApplySystemErr'));
+        return;
+      }
+      if (j.log) {
+        setLastLog(j.log);
+      }
+      setMsg(t('sshServers.claudeProviderApplySystemOk'));
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : 'error');
+    } finally {
+      setApplySystemBusy(false);
     }
   };
 
@@ -300,7 +400,7 @@ export default function RemoteClaudeProviderSettingsModal({ open, onOpenChange, 
       role="presentation"
     >
       <div
-        className="flex max-h-[min(92vh,720px)] w-full max-w-2xl flex-col overflow-hidden rounded-xl border border-border bg-card shadow-2xl"
+        className="flex max-h-[min(92vh,720px)] w-full max-w-3xl flex-col overflow-hidden rounded-xl border border-border bg-card shadow-2xl"
         onMouseDown={(e) => e.stopPropagation()}
         role="dialog"
         aria-modal="true"
@@ -326,8 +426,31 @@ export default function RemoteClaudeProviderSettingsModal({ open, onOpenChange, 
             <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
           </div>
         ) : (
-          <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain p-3 md:p-4 [scrollbar-gutter:stable]">
-            <div className="space-y-3 pr-1 text-xs">
+          <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
+            <div className="shrink-0 flex gap-1 border-b border-border bg-muted/20 px-2 pt-2">
+              <button
+                type="button"
+                className={`rounded-t-md px-3 py-1.5 text-[11px] font-medium ${
+                  activeTab === 'model' ? 'bg-card text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'
+                }`}
+                onClick={() => setActiveTab('model')}
+              >
+                {t('sshServers.claudeProviderTabModel')}
+              </button>
+              <button
+                type="button"
+                className={`rounded-t-md px-3 py-1.5 text-[11px] font-medium ${
+                  activeTab === 'system' ? 'bg-card text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'
+                }`}
+                onClick={() => setActiveTab('system')}
+              >
+                {t('sshServers.claudeProviderTabSystem')}
+              </button>
+            </div>
+            <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain p-3 md:p-4 [scrollbar-gutter:stable]">
+              <div className="space-y-3 pr-1 text-xs">
+                {activeTab === 'model' && (
+                  <>
               <div className="space-y-2">
                 <div className="text-[10px] font-medium text-foreground/90">{t('sshServers.claudeProviderCatalog')}</div>
                 <p className="text-[10px] text-muted-foreground">{t('sshServers.claudeProviderCatalogHint')}</p>
@@ -381,79 +504,99 @@ export default function RemoteClaudeProviderSettingsModal({ open, onOpenChange, 
                 </div>
               </div>
 
-              <div className="rounded border border-dashed border-border/80 p-2.5">
-                <div className="mb-1.5 text-[10px] font-medium">
-                  {editingId == null ? t('sshServers.claudeProviderAddNew') : t('sshServers.claudeProviderEditForm')}
-                </div>
-                <p className="text-[9px] text-amber-700/90 dark:text-amber-200/80">
-                  {!vaultConfigured && t('sshServers.claudeInstallNeedSecrets')}{' '}
-                </p>
-                <div className="grid grid-cols-1 gap-1.5 sm:grid-cols-2">
-                  <div>
-                    <div className="text-[9px] text-muted-foreground">{t('sshServers.claudeProviderColId')}</div>
-                    <Input
-                      className="h-8 text-[11px] font-mono"
-                      value={formCh}
-                      onChange={(e) => setFormCh(e.target.value)}
-                      disabled={!vaultConfigured}
-                      placeholder="oneapi"
-                    />
-                  </div>
-                  <div>
-                    <div className="text-[9px] text-muted-foreground">{t('sshServers.claudeProviderColBase')}</div>
-                    <Input
-                      className="h-8 text-[11px] font-mono"
-                      value={formBase}
-                      onChange={(e) => setFormBase(e.target.value)}
-                      disabled={!vaultConfigured}
-                      placeholder="https://..."
-                    />
-                  </div>
-                  <div className="sm:col-span-2">
-                    <div className="text-[9px] text-muted-foreground">{t('sshServers.claudeProviderColModels')}</div>
-                    <Input
-                      className="h-8 text-[11px] font-mono"
-                      value={formModels}
-                      onChange={(e) => setFormModels(e.target.value)}
-                      disabled={!vaultConfigured}
-                      placeholder="a,b"
-                    />
-                  </div>
-                  <div className="sm:col-span-2">
-                    <div className="text-[9px] text-muted-foreground">{t('sshServers.claudeProviderApiKey')}</div>
-                    <Input
-                      className="h-8 text-[11px] font-mono"
-                      type="password"
-                      autoComplete="off"
-                      value={formKey}
-                      onChange={(e) => setFormKey(e.target.value)}
-                      disabled={!vaultConfigured}
-                      placeholder={editingId != null ? t('sshServers.claudeProviderKeyOptional') : ''}
-                    />
-                  </div>
-                </div>
-                <div className="mt-2 flex flex-wrap gap-1.5">
-                  <Button
-                    type="button"
-                    size="sm"
-                    className="h-7 text-[10px]"
-                    disabled={!vaultConfigured || saveBusy}
-                    onClick={() => void onSaveForm()}
-                  >
-                    {saveBusy ? (
-                      <Loader2 className="h-3 w-3 animate-spin" />
-                    ) : editingId != null ? (
-                      t('actions.save')
-                    ) : (
-                      t('sshServers.claudeProviderAddBtn')
+              <div className="rounded border border-dashed border-border/80">
+                <button
+                  type="button"
+                  className="flex w-full items-start gap-2 rounded-t-lg p-2.5 text-left hover:bg-muted/40"
+                  aria-expanded={formPanelOpen}
+                  aria-controls="rccp-provider-form"
+                  onClick={() => setFormPanelOpen((o) => !o)}
+                >
+                  <span className="mt-0.5 shrink-0 text-muted-foreground" aria-hidden>
+                    {formPanelOpen ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronRight className="h-3.5 w-3.5" />}
+                  </span>
+                  <span className="min-w-0 flex-1">
+                    <span className="block text-[10px] font-medium text-foreground/90">
+                      {editingId == null ? t('sshServers.claudeProviderAddNew') : t('sshServers.claudeProviderEditForm')}
+                    </span>
+                    {!formPanelOpen && (
+                      <span className="mt-0.5 block text-[9px] text-muted-foreground">{t('sshServers.claudeProviderFormClickToExpand')}</span>
                     )}
-                  </Button>
-                  {editingId != null && (
-                    <Button type="button" size="sm" variant="ghost" className="h-7 text-[10px]" onClick={() => setEditingId(null)}>
-                      {t('actions.cancel')}
-                    </Button>
-                  )}
-                </div>
+                  </span>
+                </button>
+                {formPanelOpen && (
+                  <div id="rccp-provider-form" className="border-t border-border/60 px-2.5 pb-2.5 pt-1">
+                    <p className="mb-1.5 text-[9px] text-amber-700/90 dark:text-amber-200/80">
+                      {!vaultConfigured && t('sshServers.claudeInstallNeedSecrets')}{' '}
+                    </p>
+                    <div className="grid grid-cols-1 gap-1.5 sm:grid-cols-2">
+                      <div>
+                        <div className="text-[9px] text-muted-foreground">{t('sshServers.claudeProviderColId')}</div>
+                        <Input
+                          className="h-8 text-[11px] font-mono"
+                          value={formCh}
+                          onChange={(e) => setFormCh(e.target.value)}
+                          disabled={!vaultConfigured}
+                          placeholder="oneapi"
+                        />
+                      </div>
+                      <div>
+                        <div className="text-[9px] text-muted-foreground">{t('sshServers.claudeProviderColBase')}</div>
+                        <Input
+                          className="h-8 text-[11px] font-mono"
+                          value={formBase}
+                          onChange={(e) => setFormBase(e.target.value)}
+                          disabled={!vaultConfigured}
+                          placeholder="https://..."
+                        />
+                      </div>
+                      <div className="sm:col-span-2">
+                        <div className="text-[9px] text-muted-foreground">{t('sshServers.claudeProviderColModels')}</div>
+                        <Input
+                          className="h-8 text-[11px] font-mono"
+                          value={formModels}
+                          onChange={(e) => setFormModels(e.target.value)}
+                          disabled={!vaultConfigured}
+                          placeholder="a,b"
+                        />
+                      </div>
+                      <div className="sm:col-span-2">
+                        <div className="text-[9px] text-muted-foreground">{t('sshServers.claudeProviderApiKey')}</div>
+                        <Input
+                          className="h-8 text-[11px] font-mono"
+                          type="password"
+                          autoComplete="off"
+                          value={formKey}
+                          onChange={(e) => setFormKey(e.target.value)}
+                          disabled={!vaultConfigured}
+                          placeholder={editingId != null ? t('sshServers.claudeProviderKeyOptional') : ''}
+                        />
+                      </div>
+                    </div>
+                    <div className="mt-2 flex flex-wrap gap-1.5">
+                      <Button
+                        type="button"
+                        size="sm"
+                        className="h-7 text-[10px]"
+                        disabled={!vaultConfigured || saveBusy}
+                        onClick={() => void onSaveForm()}
+                      >
+                        {saveBusy ? (
+                          <Loader2 className="h-3 w-3 animate-spin" />
+                        ) : editingId != null ? (
+                          t('actions.save')
+                        ) : (
+                          t('sshServers.claudeProviderAddBtn')
+                        )}
+                      </Button>
+                      {editingId != null && (
+                        <Button type="button" size="sm" variant="ghost" className="h-7 text-[10px]" onClick={collapseAndClearForm}>
+                          {t('actions.cancel')}
+                        </Button>
+                      )}
+                    </div>
+                  </div>
+                )}
               </div>
 
               <div className="rounded border border-border/70 bg-muted/20 p-2.5">
@@ -535,10 +678,85 @@ export default function RemoteClaudeProviderSettingsModal({ open, onOpenChange, 
               </label>
 
               <div className="border-t border-border/60 pt-2">
-                <Button type="button" className="h-8 w-full sm:w-auto" disabled={applyBusy || !vaultConfigured} onClick={() => void onApply()}>
-                  {applyBusy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : t('sshServers.claudeProviderApply')}
+                <Button
+                  type="button"
+                  className="h-8 w-full sm:w-auto"
+                  disabled={applyModelBusy || !vaultConfigured}
+                  onClick={() => void onApplyModel()}
+                >
+                  {applyModelBusy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : t('sshServers.claudeProviderApplyModel')}
                 </Button>
               </div>
+                  </>
+                )}
+
+                {activeTab === 'system' && (
+                  <>
+                    <p className="text-[10px] text-muted-foreground">{t('sshServers.claudeProviderSystemTabHint')}</p>
+                    <label className="flex cursor-pointer items-start gap-2 text-[10px]">
+                      <input
+                        type="checkbox"
+                        className="mt-0.5"
+                        checked={prefs.isSandbox}
+                        onChange={(e) => setPrefs((p) => ({ ...p, isSandbox: e.target.checked }))}
+                      />
+                      <span>{t('sshServers.claudeProviderSandbox')}</span>
+                    </label>
+
+                    <div className="rounded border border-border/70 bg-muted/20 p-2.5">
+                      <div className="text-[10px] font-medium text-foreground/90">{t('sshServers.claudeProviderRemoteToolsTitle')}</div>
+                      <p className="mt-0.5 text-[9px] text-muted-foreground">{t('sshServers.claudeProviderRemoteToolsHint')}</p>
+                      <div className="mt-2 flex flex-wrap gap-1.5">
+                        <Input
+                          className="h-8 min-w-[140px] flex-1 text-[11px] font-mono"
+                          value={toolDraft}
+                          onChange={(e) => setToolDraft(e.target.value)}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter') {
+                              e.preventDefault();
+                              addToolEntry();
+                            }
+                          }}
+                          placeholder={t('sshServers.claudeProviderToolPlaceholder')}
+                          disabled={!vaultConfigured}
+                        />
+                        <Button type="button" size="sm" variant="secondary" className="h-8 text-[10px]" disabled={!vaultConfigured} onClick={addToolEntry}>
+                          {t('sshServers.claudeProviderToolAdd')}
+                        </Button>
+                      </div>
+                      {prefs.remoteAllowedTools.length === 0 ? (
+                        <p className="mt-2 text-[9px] text-muted-foreground">{t('sshServers.claudeProviderRemoteToolsEmpty')}</p>
+                      ) : (
+                        <ul className="mt-2 max-h-36 space-y-1 overflow-y-auto rounded border border-border/50 bg-background/80 p-1.5 [scrollbar-gutter:stable]">
+                          {prefs.remoteAllowedTools.map((entry) => (
+                            <li
+                              key={entry}
+                              className="flex items-center justify-between gap-2 rounded px-1.5 py-0.5 font-mono text-[10px] text-foreground/90"
+                            >
+                              <span className="min-w-0 truncate" title={entry}>
+                                {entry}
+                              </span>
+                              <button type="button" className="shrink-0 text-rose-600 hover:underline" onClick={() => removeToolEntry(entry)}>
+                                {t('actions.delete')}
+                              </button>
+                            </li>
+                          ))}
+                        </ul>
+                      )}
+                    </div>
+
+                    <div className="border-t border-border/60 pt-2">
+                      <Button
+                        type="button"
+                        className="h-8 w-full sm:w-auto"
+                        disabled={applySystemBusy || !vaultConfigured}
+                        onClick={() => void onApplySystem()}
+                      >
+                        {applySystemBusy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : t('sshServers.claudeProviderApplySystem')}
+                      </Button>
+                    </div>
+                  </>
+                )}
 
               {err && <p className="text-sm text-destructive">{err}</p>}
               {msg && <p className="text-sm text-emerald-600 dark:text-emerald-400">{msg}</p>}
@@ -556,6 +774,7 @@ export default function RemoteClaudeProviderSettingsModal({ open, onOpenChange, 
                   </pre>
                 </div>
               )}
+              </div>
             </div>
           </div>
         )}

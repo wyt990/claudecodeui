@@ -269,12 +269,158 @@ export async function runClaudecodeProviderDeploy(userId, serverId, opts) {
 }
 
 /**
- * 持久化偏好（供与下发分离时调用）。
+ * @param {unknown} raw
+ * @returns {number[]}
+ */
+function parseSelectedEntryIdsJson(raw) {
+  try {
+    const j = JSON.parse(String(raw || '[]'));
+    if (!Array.isArray(j)) {
+      return [];
+    }
+    return j.map((n) => parseInt(String(n), 10)).filter((n) => Number.isFinite(n));
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * @param {unknown} raw
+ * @returns {string[]}
+ */
+function parseRemoteAllowedToolsJson(raw) {
+  try {
+    const j = JSON.parse(String(raw || '[]'));
+    if (!Array.isArray(j)) {
+      return [];
+    }
+    return j.map((x) => String(x).trim()).filter(Boolean);
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * 将单条工具权限写入该 SSH 服务器的偏好（与弹窗「系统」标签同一数据源）；供对话内「添加授权」调用。
  * @param {number} userId
  * @param {number} serverId
- * @param {{ selectedEntryIds: number[]; openaiCompat: boolean; zenFreeModels: boolean}} opts
+ * @param {string} entry
+ * @returns {{ ok: boolean, alreadyAllowed?: boolean, remoteAllowedTools?: string[], error?: string }}
+ */
+export function appendRemoteAllowedToolEntry(userId, serverId, entry) {
+  const e = String(entry || '').trim();
+  if (!e) {
+    return { ok: false, error: 'entry is required' };
+  }
+  const ex = sshServerClaudeProviderPrefsDb.get(userId, serverId);
+  const list = parseRemoteAllowedToolsJson(ex?.remote_allowed_tools_json);
+  if (list.includes(e)) {
+    return { ok: true, alreadyAllowed: true, remoteAllowedTools: list };
+  }
+  const next = [...list, e];
+  persistClaudeProviderPrefs(userId, serverId, { remoteAllowedTools: next });
+  return { ok: true, alreadyAllowed: false, remoteAllowedTools: next };
+}
+
+/**
+ * 持久化偏好（与「模型 / 系统」分标签下发兼容：未传的字段沿用库中已有值）。
+ * @param {number} userId
+ * @param {number} serverId
+ * @param {{
+ *   selectedEntryIds?: number[];
+ *   openaiCompat?: boolean;
+ *   zenFreeModels?: boolean;
+ *   isSandbox?: boolean;
+ *   remoteAllowedTools?: string[];
+ * }} opts
  */
 export function persistClaudeProviderPrefs(userId, serverId, opts) {
-  const selected = Array.isArray(opts.selectedEntryIds) ? opts.selectedEntryIds : [];
-  sshServerClaudeProviderPrefsDb.upsert(userId, serverId, selected, Boolean(opts.openaiCompat), Boolean(opts.zenFreeModels));
+  const ex = sshServerClaudeProviderPrefsDb.get(userId, serverId);
+  const selected =
+    opts.selectedEntryIds !== undefined
+      ? (Array.isArray(opts.selectedEntryIds) ? opts.selectedEntryIds : []).map((n) => parseInt(String(n), 10)).filter((n) => Number.isFinite(n))
+      : parseSelectedEntryIdsJson(ex?.selected_entry_ids_json);
+  const openaiCompat = opts.openaiCompat !== undefined ? Boolean(opts.openaiCompat) : !ex || ex.openai_compat !== 0;
+  const zenFree = opts.zenFreeModels !== undefined ? Boolean(opts.zenFreeModels) : Boolean(ex?.zen_free === 1);
+  const isSandbox = opts.isSandbox !== undefined ? Boolean(opts.isSandbox) : Boolean(ex?.is_sandbox === 1);
+  const remoteAllowedTools =
+    opts.remoteAllowedTools !== undefined
+      ? (Array.isArray(opts.remoteAllowedTools) ? opts.remoteAllowedTools : []).map((t) => String(t).trim()).filter(Boolean)
+      : parseRemoteAllowedToolsJson(ex?.remote_allowed_tools_json);
+  sshServerClaudeProviderPrefsDb.upsert(
+    userId,
+    serverId,
+    selected,
+    openaiCompat,
+    zenFree,
+    isSandbox,
+    JSON.stringify(remoteAllowedTools),
+  );
+}
+
+/**
+ * 远端：IS_SANDBOX 写入安装前缀 .env；授权工具列表仅存本库，由后续每条远程 -p 与浏览器设置合并进 --allowed-tools。
+ * @param {number} userId
+ * @param {number} serverId
+ * @param {{ isSandbox: boolean; runEnvExport?: boolean }} opts
+ * @returns {Promise<{ log: Array<{ step: string; command: string; code: number | null; stdout: string; stderr: string; timedOut: boolean; ok: boolean }> }>}
+ */
+export async function runClaudecodeSystemEnvDeploy(userId, serverId, opts) {
+  const runEnvExport = opts.runEnvExport === undefined ? true : Boolean(opts.runEnvExport);
+  const isSandbox = Boolean(opts.isSandbox);
+  const val = isSandbox ? 1 : 0;
+  const cmd = `claudecode --env-set IS_SANDBOX=${val}`;
+
+  /** @type {Array<{ step: string; command: string; code: number | null; stdout: string; stderr: string; timedOut: boolean; ok: boolean }>} */
+  const log = [];
+
+  const throwWith = (message, cause) => {
+    const e = new Error(cause && cause.message ? `${message}: ${cause.message}` : message);
+    e.log = log;
+    e.cause = cause;
+    throw e;
+  };
+
+  const { client, release } = await acquirePooledSshClient(userId, serverId);
+  try {
+    console.log(`${LOG} userId=${userId} serverId=${serverId} step=env_is_sandbox value=${val}`);
+    const r = await execBashTextResult(userId, serverId, client, cmd, APPLY_TIMEOUT_MS, USE_INTERACTIVE_BASH_FOR_CLAUDECODE);
+    const line = {
+      step: 'env_is_sandbox',
+      command: cmd,
+      code: r.code,
+      stdout: (r.stdout || '').trimEnd(),
+      stderr: (r.stderr || '').trimEnd(),
+      timedOut: r.timedOut,
+      ok: !r.timedOut && (r.code === 0 || r.code === null),
+    };
+    log.push(line);
+    if (!line.ok) {
+      const h = (line.stderr || line.stdout || 'Remote command failed').slice(0, 2000);
+      throwWith(`--env-set IS_SANDBOX failed: ${h}`);
+    }
+
+    if (runEnvExport) {
+      const ex = 'claudecode --env-export';
+      console.log(`${LOG} userId=${userId} serverId=${serverId} step=env_export_after_sandbox`);
+      const rE = await execBashTextResult(userId, serverId, client, ex, APPLY_TIMEOUT_MS, USE_INTERACTIVE_BASH_FOR_CLAUDECODE);
+      log.push({
+        step: 'env_export',
+        command: ex,
+        code: rE.code,
+        stdout: (rE.stdout || '').trimEnd(),
+        stderr: (rE.stderr || '').trimEnd(),
+        timedOut: rE.timedOut,
+        ok: !rE.timedOut && (rE.code === 0 || rE.code === null),
+      });
+      if (!log[log.length - 1].ok) {
+        const h = (log[log.length - 1].stderr || log[log.length - 1].stdout || 'env-export failed').slice(0, 2000);
+        throwWith(`claudecode --env-export failed: ${h}`);
+      }
+    }
+
+    return { log };
+  } finally {
+    release();
+  }
 }

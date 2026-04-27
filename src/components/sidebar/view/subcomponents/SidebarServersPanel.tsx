@@ -18,7 +18,7 @@ import {
 import { Button, Input, ScrollArea } from '../../../../shared/view/ui';
 import { useEnvironment } from '../../../../contexts/EnvironmentContext';
 import { api } from '../../../../utils/api';
-import RemoteClaudeProviderSettingsModal from './RemoteClaudeProviderSettingsModal';
+import { CLOUDCLI_OPEN_REMOTE_CLAUDE_PROVIDER } from '../../../../lib/remoteClaudeProviderEvents';
 const SSH_TREE_EXPANDED_KEY = 'cloudcli-ssh-sidebar-tree-expanded-v1';
 
 type SshServerRow = {
@@ -115,7 +115,6 @@ export default function SidebarServersPanel({ t }: { t: TFunction }) {
   const [claudeInstallBusy, setClaudeInstallBusy] = useState(false);
   const [claudeInstallLog, setClaudeInstallLog] = useState<string | null>(null);
   const [claudeProbingId, setClaudeProbingId] = useState<number | null>(null);
-  const [claudeProviderServer, setClaudeProviderServer] = useState<SshServerRow | null>(null);
 
   useEffect(() => {
     try {
@@ -696,7 +695,13 @@ export default function SidebarServersPanel({ t }: { t: TFunction }) {
             className="inline-flex h-8 w-8 items-center justify-center rounded-md text-zinc-600 transition-colors hover:bg-zinc-500/12 disabled:cursor-not-allowed disabled:opacity-40 dark:text-zinc-300"
             title={t('sshServers.claudeProviderSettingsAction')}
             disabled={!s.has_secrets || !vaultConfigured || busyId === s.id || savingServerEdit}
-            onClick={() => setClaudeProviderServer(s)}
+            onClick={() => {
+              window.dispatchEvent(
+                new CustomEvent(CLOUDCLI_OPEN_REMOTE_CLAUDE_PROVIDER, {
+                  detail: { serverId: s.id, initialTab: 'model' },
+                }),
+              );
+            }}
           >
             <Settings className="h-4 w-4" strokeWidth={2.25} />
           </button>
@@ -1149,19 +1154,6 @@ export default function SidebarServersPanel({ t }: { t: TFunction }) {
               </div>
             </div>
           </div>
-        )}
-
-        {claudeProviderServer && (
-          <RemoteClaudeProviderSettingsModal
-            open
-            onOpenChange={(o) => {
-              if (!o) setClaudeProviderServer(null);
-            }}
-            serverId={claudeProviderServer.id}
-            serverName={claudeProviderServer.display_name || `${claudeProviderServer.host}:${claudeProviderServer.port}`}
-            vaultConfigured={vaultConfigured}
-            t={t}
-          />
         )}
 
         {formOpen && (

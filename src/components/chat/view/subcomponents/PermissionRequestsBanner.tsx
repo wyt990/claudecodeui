@@ -13,7 +13,9 @@ interface PermissionRequestsBannerProps {
     requestIds: string | string[],
     decision: { allow?: boolean; message?: string; rememberEntry?: string | null; updatedInput?: unknown },
   ) => void;
-  handleGrantToolPermission: (suggestion: { entry: string; toolName: string }) => { success: boolean };
+  handleGrantToolPermission: (
+    suggestion: { entry: string; toolName: string },
+  ) => { success: boolean } | Promise<{ success: boolean }>;
 }
 
 export default function PermissionRequestsBanner({
@@ -94,10 +96,14 @@ export default function PermissionRequestsBanner({
               <button
                 type="button"
                 onClick={() => {
-                  if (permissionEntry && !alreadyAllowed) {
-                    handleGrantToolPermission({ entry: permissionEntry, toolName: request.toolName });
-                  }
-                  handlePermissionDecision(matchingRequestIds, { allow: true, rememberEntry: permissionEntry });
+                  void (async () => {
+                    if (permissionEntry && !alreadyAllowed) {
+                      await Promise.resolve(
+                        handleGrantToolPermission({ entry: permissionEntry, toolName: request.toolName }),
+                      );
+                    }
+                    handlePermissionDecision(matchingRequestIds, { allow: true, rememberEntry: permissionEntry });
+                  })();
                 }}
                 className={`inline-flex items-center gap-2 rounded-md border px-3 py-1.5 text-xs font-medium transition-colors ${
                   permissionEntry

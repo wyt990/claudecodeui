@@ -12,6 +12,7 @@ import {
 } from './remote-ssh-helpers.js';
 import { createNormalizedMessage } from '../providers/types.js';
 import { getRemoteClaudeSessionsForApi } from './remote-claude-data.js';
+import { sshServerClaudeProviderPrefsDb } from '../database/db.js';
 
 const MAX_OUT = Math.max(1_000_000, Number(process.env.CLOUDCLI_REMOTE_CLAUDE_MAX_OUTPUT || 20 * 1024 * 1024) || 20 * 1024 * 1024);
 
@@ -38,6 +39,68 @@ function remoteClaudePrintResumeId(sessionId) {
 
 function makeTargetKey(serverId) {
   return `remote:${serverId}`;
+}
+
+/**
+ * 与 `server/claude-sdk.js` 中 `mapCliOptionsToSDK` 对齐：非 `default` 时为远端 CLI 生成 ` --permission-mode '…'` 片段。
+ * 须与远端 `claudecode --help` 中 `--permission-mode` 的 choices 一致：
+ * acceptEdits | bypassPermissions | default | dontAsk | plan（见官方/发行说明；此处不传 default）。
+ * @param {{ permissionMode?: string, toolsSettings?: { skipPermissions?: boolean } }} options
+ * @returns {string}
+ */
+function buildRemoteClaudePermissionModeCliSuffix(options) {
+  if (!options || typeof options !== 'object') {
+    return '';
+  }
+  let mode = String(options.permissionMode || 'default').trim() || 'default';
+  const settings = options.toolsSettings || {};
+  if (settings.skipPermissions && mode !== 'plan') {
+    mode = 'bypassPermissions';
+  }
+  if (!mode || mode === 'default') {
+    return '';
+  }
+  if (!/^[a-zA-Z0-9_-]+$/.test(mode)) {
+    return '';
+  }
+  const known = new Set(['acceptEdits', 'bypassPermissions', 'plan', 'dontAsk']);
+  if (!known.has(mode)) {
+    return '';
+  }
+  return ` --permission-mode ${bashSingleQuote(mode)}`;
+}
+
+/**
+ * 与 `server/claude-sdk.js` 中 `mapCliOptionsToSDK` 对齐：把本地 `claude-settings` 随 `claude-command` 传来的
+ * `allowedTools` / `disallowedTools` 转成远端 `claudecode -p` 的 `--allowed-tools` / `--disallowed-tools`。
+ * （此前仅传了 `permissionMode`，未传工具名单，故设置里「已授权」在 SSH 远程不生效。）
+ * @param {{ permissionMode?: string, toolsSettings?: { allowedTools?: string[], disallowedTools?: string[] } }} options
+ * @returns {string}
+ */
+function buildRemoteClaudeAllowedDisallowedCliSuffix(options) {
+  if (!options || typeof options !== 'object') {
+    return '';
+  }
+  const settings = options.toolsSettings || {};
+  const permissionMode = String(options.permissionMode || 'default').trim() || 'default';
+  let allowedTools = [...(settings.allowedTools || [])];
+  if (permissionMode === 'plan') {
+    const planModeTools = ['Read', 'Task', 'exit_plan_mode', 'TodoRead', 'TodoWrite', 'WebFetch', 'WebSearch'];
+    for (const tool of planModeTools) {
+      if (!allowedTools.includes(tool)) {
+        allowedTools.push(tool);
+      }
+    }
+  }
+  const disallowedTools = [...(settings.disallowedTools || [])];
+  let suffix = '';
+  if (allowedTools.length > 0) {
+    suffix += ` --allowed-tools ${bashSingleQuote(allowedTools.join(','))}`;
+  }
+  if (disallowedTools.length > 0) {
+    suffix += ` --disallowed-tools ${bashSingleQuote(disallowedTools.join(','))}`;
+  }
+  return suffix;
 }
 
 /**
@@ -143,7 +206,8 @@ export function abortRemoteSshClaudeSession(sessionId) {
  * @returns {Promise<void>}
  */
 export async function streamRemoteClaudePromptOverSsh({ userId, command, options, writer }) {
-  const { projectPath, sessionId, model, targetKey, serverId: optSid, useRemoteSsh, projectName: optProjectName } = options;
+  let optionsMut = options && typeof options === 'object' ? { ...options } : {};
+  const { projectPath, sessionId, model, targetKey, serverId: optSid, useRemoteSsh, projectName: optProjectName } = optionsMut;
   if (!useRemoteSsh) {
     return;
   }
@@ -154,6 +218,33 @@ export async function streamRemoteClaudePromptOverSsh({ userId, command, options
     );
     return;
   }
+
+  try {
+    const row = sshServerClaudeProviderPrefsDb.get(userId, serverId);
+    let extra = [];
+    if (row?.remote_allowed_tools_json) {
+      try {
+        const j = JSON.parse(row.remote_allowed_tools_json);
+        if (Array.isArray(j)) {
+          extra = j.map((x) => String(x).trim()).filter(Boolean);
+        }
+      } catch {
+        /* */
+      }
+    }
+    if (extra.length > 0) {
+      const ts = optionsMut.toolsSettings && typeof optionsMut.toolsSettings === 'object' ? { ...optionsMut.toolsSettings } : {};
+      const base = Array.isArray(ts.allowedTools) ? [...ts.allowedTools] : [];
+      for (const t of extra) {
+        if (!base.includes(t)) {
+          base.push(t);
+        }
+      }
+      optionsMut = { ...optionsMut, toolsSettings: { ...ts, allowedTools: base } };
+    }
+  } catch {
+    /* */
+  }
   const tk = makeTargetKey(serverId);
   if (!isAcceptableRemoteFsPath(String(projectPath || ''))) {
     writer.send(
@@ -161,7 +252,7 @@ export async function streamRemoteClaudePromptOverSsh({ userId, command, options
     );
     return;
   }
-  if (options?.images && Array.isArray(options.images) && options.images.length) {
+  if (optionsMut?.images && Array.isArray(optionsMut.images) && optionsMut.images.length) {
     writer.send(
       createNormalizedMessage({
         kind: 'error',
@@ -181,6 +272,8 @@ export async function streamRemoteClaudePromptOverSsh({ userId, command, options
 
   const q = (s) => bashSingleQuote(s);
   const resumeId = remoteClaudePrintResumeId(sessionId);
+  const permSuffix =
+    buildRemoteClaudePermissionModeCliSuffix(optionsMut) + buildRemoteClaudeAllowedDisallowedCliSuffix(optionsMut);
   // 有会话 id 时必须 `claude --resume <id> -p ...`，否则每次 -p 都是新会话（与本地 SDK resume 行为对齐）
   const scriptLines = [
     REMOTE_SSH_BASH_PATH_BOOTSTRAP,
@@ -192,14 +285,14 @@ export async function streamRemoteClaudePromptOverSsh({ userId, command, options
   if (resumeId) {
     scriptLines.push('RSID=' + q(resumeId));
     if (modelArg) {
-      scriptLines.push('exec "$CCLI" --resume "$RSID" -p "$PROMPT" --model ' + q(modelArg) + ' < /dev/null 2>&1');
+      scriptLines.push('exec "$CCLI"' + permSuffix + ' --resume "$RSID" -p "$PROMPT" --model ' + q(modelArg) + ' < /dev/null 2>&1');
     } else {
-      scriptLines.push('exec "$CCLI" --resume "$RSID" -p "$PROMPT" < /dev/null 2>&1');
+      scriptLines.push('exec "$CCLI"' + permSuffix + ' --resume "$RSID" -p "$PROMPT" < /dev/null 2>&1');
     }
   } else if (modelArg) {
-    scriptLines.push('exec "$CCLI" -p "$PROMPT" --model ' + q(modelArg) + ' < /dev/null 2>&1');
+    scriptLines.push('exec "$CCLI"' + permSuffix + ' -p "$PROMPT" --model ' + q(modelArg) + ' < /dev/null 2>&1');
   } else {
-    scriptLines.push('exec "$CCLI" -p "$PROMPT" < /dev/null 2>&1');
+    scriptLines.push('exec "$CCLI"' + permSuffix + ' -p "$PROMPT" < /dev/null 2>&1');
   }
   const fullScript = scriptLines.join('\n');
   if (b64.length > 4_000_000) {

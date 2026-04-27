@@ -82,6 +82,7 @@ import {
     getRemoteClaudeProjectList,
     getRemoteClaudeSessionsForApi,
     deleteRemoteClaudeSession,
+    getRemoteClaudeSessionTokenUsage,
 } from './remote/remote-claude-data.js';
 import {
     resolveRemoteClaudeProjectRoot,
@@ -2942,17 +2943,71 @@ app.get('/api/projects/:projectName/sessions/:sessionId/token-usage', authentica
         if (scope.kind === 'invalid') {
             return res.status(400).json({ error: scope.error, code: 'INVALID_TARGET' });
         }
-        // Remote targets: session JSONL lives on the SSH host; this endpoint only reads local ~/.claude.
+        // Remote targets: Cursor/Gemini/Codex 仍无远端用量；Claude 则经 SFTP 读远端 ~/.claude/projects/.../*.jsonl。
         if (scope.kind === 'remote') {
             const parsedCw = parseInt(process.env.CONTEXT_WINDOW, 10);
-            const total = Number.isFinite(parsedCw) ? parsedCw : 160000;
-            return res.json({
-                used: 0,
-                total,
-                breakdown: { input: 0, cacheCreation: 0, cacheRead: 0 },
-                unsupported: true,
-                message: 'Token usage is not available for remote SSH targets (session files are on the remote host).',
-            });
+            const contextWindow = Number.isFinite(parsedCw) ? parsedCw : 160000;
+
+            if (provider === 'cursor') {
+                return res.json({
+                    used: 0,
+                    total: 0,
+                    breakdown: { input: 0, cacheCreation: 0, cacheRead: 0 },
+                    unsupported: true,
+                    message: 'Token usage tracking not available for Cursor sessions',
+                });
+            }
+            if (provider === 'gemini') {
+                return res.json({
+                    used: 0,
+                    total: 0,
+                    breakdown: { input: 0, cacheCreation: 0, cacheRead: 0 },
+                    unsupported: true,
+                    message: 'Token usage tracking not available for Gemini sessions',
+                });
+            }
+            if (provider === 'codex') {
+                return res.json({
+                    used: 0,
+                    total: 200000,
+                    breakdown: { input: 0, cacheCreation: 0, cacheRead: 0 },
+                    unsupported: true,
+                    message: 'Token usage for remote Codex sessions is not available yet',
+                });
+            }
+
+            if (!sshServersDb.getServer(req.user.id, scope.serverId)) {
+                return res.status(404).json({ error: 'SSH server not found' });
+            }
+            try {
+                const result = await getRemoteClaudeSessionTokenUsage(
+                    req.user.id,
+                    scope.serverId,
+                    projectName,
+                    safeSessionId,
+                );
+                if (result.found) {
+                    return res.json({
+                        used: result.used,
+                        total: contextWindow,
+                        breakdown: result.breakdown,
+                        source: 'remote_jsonl',
+                    });
+                }
+                return res.json({
+                    used: 0,
+                    total: contextWindow,
+                    breakdown: result.breakdown,
+                    missingSessionFile: true,
+                    message: result.message,
+                });
+            } catch (e) {
+                console.error('Remote session token usage:', e);
+                return res.status(500).json({
+                    error: 'Failed to read remote session token usage',
+                    message: e && e.message ? e.message : String(e),
+                });
+            }
         }
 
         // Handle Cursor sessions - they use SQLite and don't have token usage info

@@ -11,7 +11,12 @@ import { testSshConnection } from '../services/ssh-test-connection.js';
 import { probeRemoteClaudeEnv, runRemoteClaudeInstall } from '../services/remote-claude-probe.js';
 import { runRemoteClaudeOpenProject } from '../services/remote-claude-open-project.js';
 import { listRemoteSftpDirectory } from '../services/remote-sftp-browse-dir.js';
-import { persistClaudeProviderPrefs, runClaudecodeProviderDeploy } from '../services/remote-claude-providers-apply.js';
+import {
+  appendRemoteAllowedToolEntry,
+  persistClaudeProviderPrefs,
+  runClaudecodeProviderDeploy,
+  runClaudecodeSystemEnvDeploy,
+} from '../services/remote-claude-providers-apply.js';
 import { runRemoteClaudecodeListModels, runRemoteClaudecodeSetDefaultModel } from '../services/remote-claude-ssh-ops.js';
 
 const router = express.Router();
@@ -239,14 +244,58 @@ router.get('/:serverId/claude-provider-prefs', (req, res) => {
         /* */
       }
     }
+    let remoteAllowedTools = [];
+    if (row?.remote_allowed_tools_json) {
+      try {
+        const j = JSON.parse(row.remote_allowed_tools_json);
+        if (Array.isArray(j)) {
+          remoteAllowedTools = j.map((x) => String(x).trim()).filter(Boolean);
+        }
+      } catch {
+        /* */
+      }
+    }
     res.json({
       selectedEntryIds,
       openaiCompat: !row || row.openai_compat !== 0,
       zenFreeModels: row ? row.zen_free === 1 : false,
+      isSandbox: row ? row.is_sandbox === 1 : false,
+      remoteAllowedTools,
     });
   } catch (e) {
     console.error('[ssh-servers] claude-provider-prefs GET', e);
     res.status(500).json({ error: 'Failed to load prefs' });
+  }
+});
+
+/** POST /:serverId/claude-remote-allowed-tools  body: { entry } — 对话内「添加授权」追加一条到该服务器的 remote_allowed_tools */
+router.post('/:serverId/claude-remote-allowed-tools', (req, res) => {
+  try {
+    const userId = req.user.id;
+    const serverId = parseInt(req.params.serverId, 10);
+    if (!Number.isFinite(serverId)) {
+      return res.status(400).json({ error: 'Invalid server id' });
+    }
+    if (!requireSshServerRow(res, userId, serverId)) {
+      return;
+    }
+    const b = req.body || {};
+    const entry = typeof b.entry === 'string' ? b.entry.trim() : '';
+    if (!entry) {
+      return res.status(400).json({ error: 'entry is required' });
+    }
+    const out = appendRemoteAllowedToolEntry(userId, serverId, entry);
+    if (!out.ok) {
+      return res.status(400).json({ error: out.error || 'append failed' });
+    }
+    res.json({
+      ok: true,
+      alreadyAllowed: Boolean(out.alreadyAllowed),
+      remoteAllowedTools: out.remoteAllowedTools || [],
+    });
+  } catch (e) {
+    console.error('[ssh-servers] claude-remote-allowed-tools POST', e);
+    res.status(500).json({ error: 'Failed to append allowed tool' });
   }
 });
 
@@ -262,11 +311,50 @@ router.put('/:serverId/claude-provider-prefs', (req, res) => {
       return;
     }
     const b = req.body || {};
-    const selectedEntryIds = Array.isArray(b.selectedEntryIds) ? b.selectedEntryIds : [];
-    const openaiCompat = Boolean(b.openaiCompat);
-    const zenFreeModels = Boolean(b.zenFreeModels);
-    persistClaudeProviderPrefs(userId, serverId, { selectedEntryIds, openaiCompat, zenFreeModels });
-    res.json({ ok: true, selectedEntryIds, openaiCompat, zenFreeModels });
+    /** @type {{ selectedEntryIds?: number[]; openaiCompat?: boolean; zenFreeModels?: boolean; isSandbox?: boolean; remoteAllowedTools?: string[] }} */
+    const patch = {};
+    if (Array.isArray(b.selectedEntryIds)) {
+      patch.selectedEntryIds = b.selectedEntryIds;
+    }
+    if (b.openaiCompat !== undefined) {
+      patch.openaiCompat = Boolean(b.openaiCompat);
+    }
+    if (b.zenFreeModels !== undefined) {
+      patch.zenFreeModels = Boolean(b.zenFreeModels);
+    }
+    if (b.isSandbox !== undefined) {
+      patch.isSandbox = Boolean(b.isSandbox);
+    }
+    if (Array.isArray(b.remoteAllowedTools)) {
+      patch.remoteAllowedTools = b.remoteAllowedTools.map((x) => String(x).trim()).filter(Boolean);
+    }
+    persistClaudeProviderPrefs(userId, serverId, patch);
+    const row = sshServerClaudeProviderPrefsDb.get(userId, serverId);
+    let remoteAllowedTools = [];
+    try {
+      const j = JSON.parse(row?.remote_allowed_tools_json || '[]');
+      if (Array.isArray(j)) {
+        remoteAllowedTools = j.map((x) => String(x).trim()).filter(Boolean);
+      }
+    } catch {
+      /* */
+    }
+    const selectedEntryIds = (() => {
+      try {
+        const j = JSON.parse(row?.selected_entry_ids_json || '[]');
+        return Array.isArray(j) ? j.map((n) => parseInt(String(n), 10)).filter((n) => Number.isFinite(n)) : [];
+      } catch {
+        return [];
+      }
+    })();
+    res.json({
+      ok: true,
+      selectedEntryIds,
+      openaiCompat: !row || row.openai_compat !== 0,
+      zenFreeModels: row ? row.zen_free === 1 : false,
+      isSandbox: row ? row.is_sandbox === 1 : false,
+      remoteAllowedTools,
+    });
   } catch (e) {
     console.error('[ssh-servers] claude-provider-prefs PUT', e);
     res.status(500).json({ error: 'Failed to save prefs' });
@@ -284,11 +372,45 @@ router.post('/:serverId/claude-providers-apply', async (req, res) => {
     return;
   }
   const b = req.body || {};
+  const runEnvExport = b.runEnvExport === undefined ? true : Boolean(b.runEnvExport);
+  const persistFromBody = b.persist !== false;
+  const scope = b.scope === 'system' ? 'system' : 'model';
+
+  if (scope === 'system') {
+    const isSandbox = Boolean(b.isSandbox);
+    const remoteAllowedTools = Array.isArray(b.remoteAllowedTools)
+      ? b.remoteAllowedTools.map((x) => String(x).trim()).filter(Boolean)
+      : [];
+    console.log(
+      `${CLAUDE_DEPLOY_LOG} userId=${userId} serverId=${serverId} step=system_deploy isSandbox=${isSandbox} toolsCount=${remoteAllowedTools.length} runEnvExport=${runEnvExport} persist=${persistFromBody}`,
+    );
+    try {
+      if (persistFromBody) {
+        persistClaudeProviderPrefs(userId, serverId, { isSandbox, remoteAllowedTools });
+      }
+      const { log } = await runClaudecodeSystemEnvDeploy(userId, serverId, { isSandbox, runEnvExport });
+      log.push({
+        step: 'allowed_tools_cloudcli',
+        command: `stored ${remoteAllowedTools.length} tool name(s) in app DB for this server (merged with browser allowedTools on each remote claudecode -p)`,
+        code: 0,
+        stdout: remoteAllowedTools.length ? remoteAllowedTools.join(', ') : '(empty)',
+        stderr: '',
+        timedOut: false,
+        ok: true,
+      });
+      res.json({ ok: true, log, message: 'System deploy completed.' });
+    } catch (e) {
+      const em = e instanceof Error ? e.message : String(e);
+      const plog = e && typeof e === 'object' && 'log' in e && Array.isArray((e).log) ? (e).log : [];
+      console.error(`${CLAUDE_DEPLOY_LOG} userId=${userId} serverId=${serverId} step=system_error`, e);
+      res.status(500).json({ error: em, code: 'CLAUDE_SYSTEM_APPLY_FAILED', log: plog });
+    }
+    return;
+  }
+
   const selectedEntryIds = Array.isArray(b.selectedEntryIds) ? b.selectedEntryIds : [];
   const openaiCompat = b.openaiCompat === undefined ? true : Boolean(b.openaiCompat);
   const zenFreeModels = Boolean(b.zenFreeModels);
-  const runEnvExport = b.runEnvExport === undefined ? true : Boolean(b.runEnvExport);
-  const persistFromBody = b.persist !== false;
 
   console.log(
     `${CLAUDE_DEPLOY_LOG} userId=${userId} serverId=${serverId} step=start selected=${JSON.stringify(

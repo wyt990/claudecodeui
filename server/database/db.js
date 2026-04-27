@@ -301,12 +301,33 @@ const runMigrations = () => {
         selected_entry_ids_json TEXT NOT NULL DEFAULT '[]',
         openai_compat INTEGER NOT NULL DEFAULT 1,
         zen_free INTEGER NOT NULL DEFAULT 0,
+        is_sandbox INTEGER NOT NULL DEFAULT 0,
+        remote_allowed_tools_json TEXT NOT NULL DEFAULT '[]',
         updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
         PRIMARY KEY (user_id, server_id),
         FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
         FOREIGN KEY (server_id) REFERENCES ssh_servers(id) ON DELETE CASCADE
       )
     `);
+
+    try {
+      const prefCols = db.prepare("PRAGMA table_info(ssh_server_claude_provider_prefs)").all();
+      const prefNames = prefCols.map((c) => c.name);
+      if (prefNames.length > 0) {
+        if (!prefNames.includes('is_sandbox')) {
+          console.log('Running migration: ssh_server_claude_provider_prefs.is_sandbox');
+          db.exec('ALTER TABLE ssh_server_claude_provider_prefs ADD COLUMN is_sandbox INTEGER NOT NULL DEFAULT 0');
+        }
+        if (!prefNames.includes('remote_allowed_tools_json')) {
+          console.log('Running migration: ssh_server_claude_provider_prefs.remote_allowed_tools_json');
+          db.exec(
+            `ALTER TABLE ssh_server_claude_provider_prefs ADD COLUMN remote_allowed_tools_json TEXT NOT NULL DEFAULT '[]'`,
+          );
+        }
+      }
+    } catch (e) {
+      console.warn('ssh_server_claude_provider_prefs column migration:', e?.message || e);
+    }
 
     // Create default workspace for existing users if none exists
     const usersWithoutWorkspace = db.prepare(`
@@ -1370,21 +1391,28 @@ const sshServerClaudeProviderPrefsDb = {
       .prepare('SELECT * FROM ssh_server_claude_provider_prefs WHERE user_id = ? AND server_id = ?')
       .get(userId, serverId);
   },
-  upsert: (userId, serverId, selectedEntryIds, openaiCompat, zenFree) => {
+  upsert: (userId, serverId, selectedEntryIds, openaiCompat, zenFree, isSandbox, remoteAllowedToolsJson) => {
     const j = JSON.stringify(
       (Array.isArray(selectedEntryIds) ? selectedEntryIds : []).map((n) => parseInt(String(n), 10)).filter((n) => Number.isFinite(n)),
     );
     const oa = openaiCompat ? 1 : 0;
     const z = zenFree ? 1 : 0;
+    const sb = isSandbox ? 1 : 0;
+    const toolsJson =
+      typeof remoteAllowedToolsJson === 'string' && remoteAllowedToolsJson.trim() !== ''
+        ? remoteAllowedToolsJson
+        : '[]';
     db.prepare(
-      `INSERT INTO ssh_server_claude_provider_prefs (user_id, server_id, selected_entry_ids_json, openai_compat, zen_free, updated_at)
-       VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+      `INSERT INTO ssh_server_claude_provider_prefs (user_id, server_id, selected_entry_ids_json, openai_compat, zen_free, is_sandbox, remote_allowed_tools_json, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
        ON CONFLICT(user_id, server_id) DO UPDATE SET
          selected_entry_ids_json=excluded.selected_entry_ids_json,
          openai_compat=excluded.openai_compat,
          zen_free=excluded.zen_free,
+         is_sandbox=excluded.is_sandbox,
+         remote_allowed_tools_json=excluded.remote_allowed_tools_json,
          updated_at=CURRENT_TIMESTAMP`,
-    ).run(userId, serverId, j, oa, z);
+    ).run(userId, serverId, j, oa, z, sb, toolsJson);
   },
   /** @param {number} userId
    *  @param {number} entryId

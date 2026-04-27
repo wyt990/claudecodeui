@@ -1,6 +1,6 @@
 /**
  * 远程：多渠本机目录（claude-providers）+ 配置模板（claude_md）+ 在远程项目下追加 CLAUDE.md。
- * 每服务器下发走 `/api/ssh-servers/:id/claude-providers-apply`（见 ssh-servers 路由）。
+ * 每服务器下发走 `/api/ssh-servers/:id/claude-providers-apply`：`scope` 缺省或 `model` 为多渠与 OpenAI/Zen；`scope: system` 为 IS_SANDBOX 与本库按服务器的授权工具（见 ssh-servers 路由）。
  * 挂载在 `app.use("/api", authenticateToken, thisRouter)` 下。
  *
  * @module server/routes/remote-server-claude-settings

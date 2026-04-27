@@ -10,7 +10,7 @@ import type {
   TouchEvent,
 } from 'react';
 import { useDropzone } from 'react-dropzone';
-import { authenticatedFetch } from '../../../utils/api';
+import { api, authenticatedFetch } from '../../../utils/api';
 import { thinkingModes } from '../constants/thinkingModes';
 import { grantClaudeToolPermission } from '../utils/chatPermissions';
 import { safeLocalStorage } from '../utils/chatStorage';
@@ -910,13 +910,28 @@ export function useChatComposerState({
   }, [canAbortSession, currentSessionId, isRemote, pendingViewSessionRef, provider, selectedSession?.id, sendMessage]);
 
   const handleGrantToolPermission = useCallback(
-    (suggestion: { entry: string; toolName: string }) => {
+    async (suggestion: { entry: string; toolName: string }) => {
       if (!suggestion || provider !== 'claude') {
         return { success: false };
       }
+      if (isRemote && currentTarget.kind === 'remote') {
+        try {
+          const res = await api.sshServers.appendClaudeRemoteAllowedTool(currentTarget.serverId, {
+            entry: suggestion.entry,
+          });
+          const j = (await res.json().catch(() => ({}))) as { error?: string; ok?: boolean };
+          if (!res.ok) {
+            console.warn('[grant tool] remote append failed', j.error || res.status);
+            return { success: false };
+          }
+        } catch (e) {
+          console.warn('[grant tool] remote append', e);
+          return { success: false };
+        }
+      }
       return grantClaudeToolPermission(suggestion.entry);
     },
-    [provider],
+    [provider, isRemote, currentTarget],
   );
 
   const handlePermissionDecision = useCallback(

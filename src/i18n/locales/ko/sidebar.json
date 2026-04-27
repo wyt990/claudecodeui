@@ -235,7 +235,20 @@
     "saveBodyAsMdTemplate": "Save body as template",
     "claudeProviderSettingsAction": "Multi-provider & CLI deploy",
     "claudeProviderModalTitle": "Remote: providers & deploy ({{name}})",
-    "claudeProviderModalHint": "The catalog is stored in this app (shared). Check rows to mark which providers to deploy to this server only. Order: --add-provider for each selection; then env flags; then claudecode --env-export.",
+    "claudeProviderModalHint": "Use the Model and System tabs; each has its own Deploy button. The catalog is shared across servers; checked rows deploy only to this SSH host.",
+    "claudeProviderTabModel": "Model",
+    "claudeProviderTabSystem": "System",
+    "claudeProviderApplyModel": "Deploy model settings",
+    "claudeProviderApplySystem": "Deploy system settings",
+    "claudeProviderApplySystemOk": "System settings saved and deployed (IS_SANDBOX and allowed tools for this server).",
+    "claudeProviderApplySystemErr": "System deploy failed. See the step log below.",
+    "claudeProviderSystemTabHint": "IS_SANDBOX is written on the remote via claudecode --env-set. Allowed tool names are stored in this app per server and merged into each remote --allowed-tools with your browser list.",
+    "claudeProviderSandbox": "IS_SANDBOX: when checked, runs claudecode --env-set IS_SANDBOX=1 on the remote; unchecked sets 0.",
+    "claudeProviderRemoteToolsTitle": "Allowed tools for this server",
+    "claudeProviderRemoteToolsHint": "Same entries as in chat (e.g. Grep, Read, Bash(git:*) ). Merged with browser claude-settings for each remote -p run.",
+    "claudeProviderRemoteToolsEmpty": "No tools yet; type a name above and add.",
+    "claudeProviderToolPlaceholder": "e.g. Grep or Bash(git:*)",
+    "claudeProviderToolAdd": "Add",
     "claudeProviderCatalog": "Local channel catalog (not on remote until you apply)",
     "claudeProviderCatalogHint": "Channel id maps to --id; models may be comma-separated; API key is encrypted (CLOUDCLI_VAULT_KEY) and stored only here.",
     "claudeProviderColId": "Channel id",
@@ -264,7 +277,8 @@
     "claudeProviderApply": "Apply to remote",
     "claudeProviderApplyOk": "Deploy completed. See command log and env-export below.",
     "claudeProviderApplyErr": "Deploy failed. See the step log or server output.",
-    "claudeProviderLog": "Step log"
+    "claudeProviderLog": "Step log",
+    "claudeProviderFormClickToExpand": "Click to expand. After a successful add, or Save/Cancel, the form collapses and clears."
   },
   "version": {
     "updateAvailable": "업데이트 가능"

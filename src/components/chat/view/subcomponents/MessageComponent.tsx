@@ -26,7 +26,11 @@ type MessageComponentProps = {
   createDiff: (oldStr: string, newStr: string) => DiffLine[];
   onFileOpen?: (filePath: string, diffInfo?: unknown) => void;
   onShowSettings?: () => void;
-  onGrantToolPermission?: (suggestion: ClaudePermissionSuggestion) => PermissionGrantResult | null | undefined;
+  /** 远程会话：权限区「打开设置」打开 SSH 多渠弹窗的系统标签 */
+  onOpenRemoteClaudeToolSettings?: () => void;
+  onGrantToolPermission?: (
+    suggestion: ClaudePermissionSuggestion,
+  ) => PermissionGrantResult | null | undefined | Promise<PermissionGrantResult | null | undefined>;
   autoExpandTools?: boolean;
   showRawParameters?: boolean;
   showThinking?: boolean;
@@ -43,7 +47,21 @@ type InteractiveOption = {
 type PermissionGrantState = 'idle' | 'granted' | 'error';
 const COPY_HIDDEN_TOOL_NAMES = new Set(['Bash', 'Edit', 'Write', 'ApplyPatch']);
 
-const MessageComponent = memo(({ message, prevMessage, createDiff, onFileOpen, onShowSettings, onGrantToolPermission, autoExpandTools, showRawParameters, showThinking, selectedProject, provider }: MessageComponentProps) => {
+const MessageComponent = memo(
+  ({
+    message,
+    prevMessage,
+    createDiff,
+    onFileOpen,
+    onShowSettings,
+    onOpenRemoteClaudeToolSettings,
+    onGrantToolPermission,
+    autoExpandTools,
+    showRawParameters,
+    showThinking,
+    selectedProject,
+    provider,
+  }: MessageComponentProps) => {
   const { t } = useTranslation('chat');
   const isGrouped = prevMessage && prevMessage.type === message.type &&
     ((prevMessage.type === 'assistant') ||
@@ -234,12 +252,14 @@ const MessageComponent = memo(({ message, prevMessage, createDiff, onFileOpen, o
                                 type="button"
                                 onClick={() => {
                                   if (!onGrantToolPermission) return;
-                                  const result = onGrantToolPermission(permissionSuggestion);
-                                  if (result?.success) {
-                                    setPermissionGrantState('granted');
-                                  } else {
-                                    setPermissionGrantState('error');
-                                  }
+                                  void (async () => {
+                                    const result = await Promise.resolve(onGrantToolPermission(permissionSuggestion));
+                                    if (result?.success) {
+                                      setPermissionGrantState('granted');
+                                    } else {
+                                      setPermissionGrantState('error');
+                                    }
+                                  })();
                                 }}
                                 disabled={permissionSuggestion.isAllowed || permissionGrantState === 'granted'}
                                 className={`inline-flex items-center gap-2 rounded-md border px-3 py-1.5 text-xs font-medium transition-colors ${permissionSuggestion.isAllowed || permissionGrantState === 'granted'
@@ -251,10 +271,13 @@ const MessageComponent = memo(({ message, prevMessage, createDiff, onFileOpen, o
                                   ? t('permissions.added')
                                   : t('permissions.grant', { tool: permissionSuggestion.toolName })}
                               </button>
-                              {onShowSettings && (
+                              {(onOpenRemoteClaudeToolSettings || onShowSettings) && (
                                 <button
                                   type="button"
-                                  onClick={(e) => { e.stopPropagation(); onShowSettings(); }}
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    (onOpenRemoteClaudeToolSettings || onShowSettings)?.();
+                                  }}
                                   className="text-xs text-red-700 underline hover:text-red-800 dark:text-red-200 dark:hover:text-red-100"
                                 >
                                   {t('permissions.openSettings')}
@@ -470,7 +493,8 @@ const MessageComponent = memo(({ message, prevMessage, createDiff, onFileOpen, o
       )}
     </div>
   );
-});
+  },
+);
 
 export default MessageComponent;
 

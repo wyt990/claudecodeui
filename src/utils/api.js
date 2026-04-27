@@ -357,6 +357,11 @@ export const api = {
           : `/api/ssh-servers/${serverId}/browse-dir`;
       return authenticatedFetch(u);
     },
+    appendClaudeRemoteAllowedTool: (serverId, body) =>
+      authenticatedFetch(`/api/ssh-servers/${serverId}/claude-remote-allowed-tools`, {
+        method: 'POST',
+        body: JSON.stringify(body || {}),
+      }),
     getClaudeProviderPrefs: (serverId) =>
       authenticatedFetch(`/api/ssh-servers/${serverId}/claude-provider-prefs`),
     putClaudeProviderPrefs: (serverId, body) =>
@@ -364,6 +369,7 @@ export const api = {
         method: 'PUT',
         body: JSON.stringify(body || {}),
       }),
+    /** body.scope: omit | 'model' → 渠道与 OpenAI/Zen；'system' → IS_SANDBOX + 本服务器授权工具（库） */
     applyClaudeProviders: (serverId, body) =>
       authenticatedFetch(`/api/ssh-servers/${serverId}/claude-providers-apply`, {
         method: 'POST',

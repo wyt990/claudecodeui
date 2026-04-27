@@ -1,5 +1,7 @@
-import React, { useCallback, useEffect, useRef } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
+import { api } from '../../../utils/api';
+import RemoteClaudeProviderSettingsModal from '../../sidebar/view/subcomponents/RemoteClaudeProviderSettingsModal';
 import { useTasksSettings } from '../../../contexts/TasksSettingsContext';
 import { QuickSettingsPanel } from '../../quick-settings-panel';
 import type { ChatInterfaceProps, Provider  } from '../types/types';
@@ -10,6 +12,8 @@ import { useChatRealtimeHandlers } from '../hooks/useChatRealtimeHandlers';
 import { useChatComposerState } from '../hooks/useChatComposerState';
 import { useSessionStore } from '../../../stores/useSessionStore';
 import { useEnvironment } from '../../../contexts/EnvironmentContext';
+import { CLOUDCLI_OPEN_REMOTE_CLAUDE_PROVIDER } from '../../../lib/remoteClaudeProviderEvents';
+import type { OpenRemoteClaudeProviderDetail } from '../../../lib/remoteClaudeProviderEvents';
 import ChatMessagesPane from './subcomponents/ChatMessagesPane';
 import ChatComposer from './subcomponents/ChatComposer';
 
@@ -45,6 +49,7 @@ function ChatInterface({
 }: ChatInterfaceProps) {
   const { tasksEnabled, isTaskMasterInstalled } = useTasksSettings();
   const { t } = useTranslation('chat');
+  const { t: tSidebar } = useTranslation('sidebar');
 
   const { targetKey, isRemote, currentTarget } = useEnvironment();
   const sessionStore = useSessionStore();
@@ -98,6 +103,64 @@ function ChatInterface({
     remoteClaudeServerId:
       isRemote && currentTarget.kind === 'remote' ? currentTarget.serverId : null,
   });
+
+  const openRemoteClaudeToolSettings = useCallback(() => {
+    if (isRemote && provider === 'claude' && currentTarget.kind === 'remote') {
+      const detail: OpenRemoteClaudeProviderDetail = {
+        serverId: currentTarget.serverId,
+        initialTab: 'system',
+      };
+      window.dispatchEvent(new CustomEvent(CLOUDCLI_OPEN_REMOTE_CLAUDE_PROVIDER, { detail }));
+    }
+  }, [isRemote, provider, currentTarget]);
+
+  const [sshMetaVaultConfigured, setSshMetaVaultConfigured] = useState(true);
+  const [remoteClaudeProviderModal, setRemoteClaudeProviderModal] = useState<{
+    serverId: number;
+    serverName: string;
+    initialTab: 'model' | 'system';
+  } | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      try {
+        const r = await api.sshServers.meta();
+        const j = (await r.json().catch(() => ({}))) as { vaultConfigured?: boolean };
+        if (!cancelled) {
+          setSshMetaVaultConfigured(Boolean(j?.vaultConfigured));
+        }
+      } catch {
+        if (!cancelled) {
+          setSshMetaVaultConfigured(false);
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    const h = (ev: Event) => {
+      const d = (ev as CustomEvent<OpenRemoteClaudeProviderDetail>).detail;
+      const sid = d?.serverId;
+      if (!Number.isFinite(sid) || sid < 1) {
+        return;
+      }
+      const displayName =
+        isRemote && currentTarget.kind === 'remote' && currentTarget.serverId === sid
+          ? currentTarget.displayName
+          : `SSH #${sid}`;
+      setRemoteClaudeProviderModal({
+        serverId: sid,
+        serverName: displayName,
+        initialTab: d.initialTab === 'system' ? 'system' : 'model',
+      });
+    };
+    window.addEventListener(CLOUDCLI_OPEN_REMOTE_CLAUDE_PROVIDER, h as EventListener);
+    return () => window.removeEventListener(CLOUDCLI_OPEN_REMOTE_CLAUDE_PROVIDER, h as EventListener);
+  }, [isRemote, currentTarget]);
 
   const {
     chatMessages,
@@ -300,6 +363,23 @@ function ChatInterface({
     };
   }, [resetStreamingState]);
 
+  const remoteClaudeProviderModalEl =
+    remoteClaudeProviderModal != null ? (
+      <RemoteClaudeProviderSettingsModal
+        open
+        onOpenChange={(o) => {
+          if (!o) {
+            setRemoteClaudeProviderModal(null);
+          }
+        }}
+        serverId={remoteClaudeProviderModal.serverId}
+        serverName={remoteClaudeProviderModal.serverName}
+        vaultConfigured={sshMetaVaultConfigured}
+        initialTab={remoteClaudeProviderModal.initialTab}
+        t={tSidebar}
+      />
+    ) : null;
+
   if (!selectedProject) {
     const selectedProviderLabel =
       provider === 'cursor'
@@ -311,16 +391,19 @@ function ChatInterface({
             : t('messageTypes.claude');
 
     return (
-      <div className="flex h-full items-center justify-center">
-        <div className="text-center text-muted-foreground">
-          <p className="text-sm">
-            {t('projectSelection.startChatWithProvider', {
-              provider: selectedProviderLabel,
-              defaultValue: 'Select a project to start chatting with {{provider}}',
-            })}
-          </p>
+      <>
+        <div className="flex h-full items-center justify-center">
+          <div className="text-center text-muted-foreground">
+            <p className="text-sm">
+              {t('projectSelection.startChatWithProvider', {
+                provider: selectedProviderLabel,
+                defaultValue: 'Select a project to start chatting with {{provider}}',
+              })}
+            </p>
+          </div>
         </div>
-      </div>
+        {remoteClaudeProviderModalEl}
+      </>
     );
   }
 
@@ -366,6 +449,9 @@ function ChatInterface({
           createDiff={createDiff}
           onFileOpen={onFileOpen}
           onShowSettings={onShowSettings}
+          onOpenRemoteClaudeToolSettings={
+            isRemote && provider === 'claude' && currentTarget.kind === 'remote' ? openRemoteClaudeToolSettings : undefined
+          }
           onGrantToolPermission={handleGrantToolPermission}
           autoExpandTools={autoExpandTools}
           showRawParameters={showRawParameters}
@@ -448,6 +534,8 @@ function ChatInterface({
       </div>
 
       <QuickSettingsPanel />
+
+      {remoteClaudeProviderModalEl}
     </>
   );
 }

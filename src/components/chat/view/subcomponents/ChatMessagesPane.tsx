@@ -47,7 +47,11 @@ interface ChatMessagesPaneProps {
   createDiff: any;
   onFileOpen?: (filePath: string, diffInfo?: unknown) => void;
   onShowSettings?: () => void;
-  onGrantToolPermission: (suggestion: { entry: string; toolName: string }) => { success: boolean };
+  /** 远程 Claude：打开侧栏「远程多渠」弹窗并切到系统标签（授权工具 / IS_SANDBOX） */
+  onOpenRemoteClaudeToolSettings?: () => void;
+  onGrantToolPermission: (
+    suggestion: { entry: string; toolName: string },
+  ) => { success: boolean } | Promise<{ success: boolean }>;
   autoExpandTools?: boolean;
   showRawParameters?: boolean;
   showThinking?: boolean;
@@ -93,6 +97,7 @@ export default function ChatMessagesPane({
   createDiff,
   onFileOpen,
   onShowSettings,
+  onOpenRemoteClaudeToolSettings,
   onGrantToolPermission,
   autoExpandTools,
   showRawParameters,
@@ -251,6 +256,7 @@ export default function ChatMessagesPane({
                 createDiff={createDiff}
                 onFileOpen={onFileOpen}
                 onShowSettings={onShowSettings}
+                onOpenRemoteClaudeToolSettings={onOpenRemoteClaudeToolSettings}
                 onGrantToolPermission={onGrantToolPermission}
                 autoExpandTools={autoExpandTools}
                 showRawParameters={showRawParameters}
