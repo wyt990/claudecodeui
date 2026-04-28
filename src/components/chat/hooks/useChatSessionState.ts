@@ -190,14 +190,16 @@ export function useChatSessionState({
     let all = normalizedToChatMessages(storeMessages);
     // 新会话：先 appendRealtime 了 error（如远程不支持附图）而用户气泡仍在 pending 时，原先 all.length>0 会吞掉 pending
     if (pendingUserMessage) {
+      const canShowPending =
+        !selectedSession?.id || Boolean(activeSessionId && activeSessionId.startsWith('new-session-'));
       const hasUser = all.some((m) => m.type === 'user');
-      if (!hasUser) {
+      if (canShowPending && !hasUser) {
         all = [pendingUserMessage, ...all];
       }
     }
     if (viewHiddenCount > 0 && viewHiddenCount < all.length) return all.slice(0, -viewHiddenCount);
     return all;
-  }, [storeMessages, viewHiddenCount, pendingUserMessage]);
+  }, [storeMessages, viewHiddenCount, pendingUserMessage, selectedSession?.id, activeSessionId]);
 
   /* ---------------------------------------------------------------- */
   /*  addMessage / clearMessages / rewindMessages                     */
@@ -334,6 +336,8 @@ export function useChatSessionState({
       setClaudeStatus(null);
       setCanAbortSession(false);
       setIsLoading(false);
+      // 会话被删除/清空后，必须清理挂起用户气泡，避免误显示到新会话页
+      setPendingUserMessage(null);
       setCurrentSessionId(null);
       sessionStorage.removeItem('cursorSessionId');
       messagesOffsetRef.current = 0;
@@ -358,6 +362,8 @@ export function useChatSessionState({
       pendingViewSessionRef.current = null;
       setClaudeStatus(null);
       setCanAbortSession(false);
+      // 切换到其他会话时，清理仅属于上一会话创建期的挂起用户气泡
+      setPendingUserMessage(null);
     }
 
     // Reset pagination/scroll state
