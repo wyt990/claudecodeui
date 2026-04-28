@@ -42,6 +42,40 @@ function extractAssistantFromMessage(message) {
 }
 
 /**
+ * Scan assistant.message.content[] for tool_use blocks (especially Read)
+ * @param {unknown} message
+ * @returns {{ sawToolUse: boolean, sawReadToolUse: boolean }}
+ */
+function scanToolUseInAssistantMessage(message) {
+  if (!message || typeof message !== 'object') {
+    return { sawToolUse: false, sawReadToolUse: false };
+  }
+  const m = /** @type {Record<string, unknown>} */ (message);
+  const content = m.content;
+  if (!Array.isArray(content)) {
+    return { sawToolUse: false, sawReadToolUse: false };
+  }
+  let sawToolUse = false;
+  let sawReadToolUse = false;
+  for (const block of content) {
+    if (!block || typeof block !== 'object') {
+      continue;
+    }
+    const b = /** @type {Record<string, unknown>} */ (block);
+    if (b.type === 'tool_use') {
+      sawToolUse = true;
+      // 统一处理 name/tool_name 字段
+      const nameRaw = b.name ?? b.tool_name ?? '';
+      const name = String(nameRaw || '').trim().toLowerCase();
+      if (name === 'read') {
+        sawReadToolUse = true;
+      }
+    }
+  }
+  return { sawToolUse, sawReadToolUse };
+}
+
+/**
  * @param {unknown} obj
  * @returns {string | null}
  */
@@ -123,6 +157,17 @@ export function createRemoteClaudeStreamJsonStdoutHandler(writer, workSid, tk, s
           ?? '';
         const name = String(nameRaw || '').trim().toLowerCase();
         if (name === 'read') {
+          sawReadToolUse = true;
+        }
+      }
+      // 补充检测嵌套在 assistant.message.content[] 中的 tool_use
+      if (objType === 'assistant') {
+        const message = /** @type {{ message?: unknown }} */ (obj).message;
+        const nested = scanToolUseInAssistantMessage(message);
+        if (nested.sawToolUse) {
+          sawToolUse = true;
+        }
+        if (nested.sawReadToolUse) {
           sawReadToolUse = true;
         }
       }
