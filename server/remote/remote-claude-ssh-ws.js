@@ -710,6 +710,26 @@ export async function streamRemoteClaudePromptOverSsh({ userId, command, options
       });
     };
 
+    // 发送 fallback 模式状态提示：告知用户当前执行模式（持久化/非持久化）
+    const fallbackMode = avoidResumeWriteAmplification ? 'ephemeral' : 'persistent';
+    chatImagesDebugLog('[remote ssh] fallback mode', {
+      workSid,
+      mode: fallbackMode,
+      avoidResumeWriteAmplification,
+      resumeId,
+    });
+    writer.send(
+      createNormalizedMessage({
+        kind: 'status',
+        content: avoidResumeWriteAmplification
+          ? '[CloudCLI] 检测到图片处理需要重试。为避免重复写入历史，本次回复不会保存到会话中（刷新后不可见）。'
+          : '[CloudCLI] 图片处理重试中...',
+        sessionId: workSid,
+        provider: 'claude',
+        targetKey: tk,
+      }),
+    );
+
     const first = await runFallbackOnce({
       hardConstraint: false,
       // 避免把同一用户图片 turn 因 fallback 重复写入当前会话历史：
