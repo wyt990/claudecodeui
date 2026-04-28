@@ -327,6 +327,15 @@ const STALE_THRESHOLD_MS = 30_000;
 
 const MAX_REALTIME_MESSAGES = 500;
 
+// ─── In-flight request tracking ──────────────────────────────────────────────
+
+interface InflightRequest {
+  promise: Promise<unknown>;
+  timestamp: number;
+}
+
+const MIN_REFRESH_INTERVAL_MS = 500; // 最短刷新间隔：500ms
+
 // ─── Hook ────────────────────────────────────────────────────────────────────
 
 export function useSessionStore() {
@@ -334,6 +343,8 @@ export function useSessionStore() {
   const activeSessionIdRef = useRef<string | null>(null);
   // Bump to force re-render — only when the active session's data changes
   const [, setTick] = useState(0);
+  // Track in-flight requests per session to prevent concurrent duplicates
+  const inflightRef = useRef(new Map<string, InflightRequest>());
   const notify = useCallback((rawSessionId: string) => {
     const want = getSessionStoreKey(rawSessionId);
     const actRaw = activeSessionIdRef.current;
@@ -362,11 +373,13 @@ export function useSessionStore() {
   const clearEntireStore = useCallback(() => {
     storeRef.current.clear();
     activeSessionIdRef.current = null;
+    inflightRef.current.clear();
     setTick(n => n + 1);
   }, []);
 
   /**
    * Fetch messages from the unified endpoint and populate serverMessages.
+   * Includes inflight lock and debounce to prevent concurrent/repeated requests.
    */
   const fetchFromServer = useCallback(async (
     sessionId: string,
@@ -376,85 +389,123 @@ export function useSessionStore() {
       projectPath?: string;
       limit?: number | null;
       offset?: number;
+      /** Force refresh even if recently fetched */
+      force?: boolean;
     } = {},
   ) => {
+    const key = getSessionStoreKey(sessionId);
+    const inflight = inflightRef.current;
+
+    // Check for in-flight request - return existing promise if one exists
+    const existing = inflight.get(key);
+    if (existing) {
+      const elapsed = Date.now() - existing.timestamp;
+      // If request started < 2s ago, reuse it
+      if (elapsed < 2000) {
+        chatImagesDebugLog('[SessionStore] reuse inflight fetch', { sessionId, elapsedMs: elapsed });
+        return existing.promise as Promise<SessionSlot>;
+      }
+      // Otherwise, the old request may have stalled; proceed with new one
+    }
+
+    // Check if recently fetched (debounce) - skip if data is fresh enough
     const slot = getSlot(sessionId);
+    if (!opts.force && (opts.offset ?? 0) === 0) {
+      const fetchedElapsed = Date.now() - slot.fetchedAt;
+      if (fetchedElapsed < MIN_REFRESH_INTERVAL_MS) {
+        chatImagesDebugLog('[SessionStore] skip fetch (recently fetched)', {
+          sessionId,
+          elapsedMs: fetchedElapsed,
+          thresholdMs: MIN_REFRESH_INTERVAL_MS,
+        });
+        return slot;
+      }
+    }
+
+    // Start new request
     slot.status = 'loading';
     notify(sessionId);
 
-    try {
-      const params = new URLSearchParams();
-      if (opts.provider) params.append('provider', opts.provider);
-      if (opts.projectName) params.append('projectName', opts.projectName);
-      if (opts.projectPath) params.append('projectPath', opts.projectPath);
-      if (opts.limit !== null && opts.limit !== undefined) {
-        params.append('limit', String(opts.limit));
-        params.append('offset', String(opts.offset ?? 0));
+    const requestPromise = (async () => {
+      try {
+        const params = new URLSearchParams();
+        if (opts.provider) params.append('provider', opts.provider);
+        if (opts.projectName) params.append('projectName', opts.projectName);
+        if (opts.projectPath) params.append('projectPath', opts.projectPath);
+        if (opts.limit !== null && opts.limit !== undefined) {
+          params.append('limit', String(opts.limit));
+          params.append('offset', String(opts.offset ?? 0));
+        }
+
+        const qs = params.toString();
+        const url = `/api/sessions/${encodeURIComponent(sessionId)}/messages${qs ? `?${qs}` : ''}`;
+        const response = await authenticatedFetch(url);
+
+        if (!response.ok) {
+          throw new Error(`HTTP ${response.status}`);
+        }
+
+        const data = await response.json();
+        const messages: NormalizedMessage[] = data.messages || [];
+        const rtSnapshot = [...slot.realtimeMessages];
+        const mergedMessages = mergeUserImagesFromRealtime(messages, rtSnapshot);
+
+        if (isChatImagesDebugEnabled()) {
+          const apiPathNote = messages.filter(
+            (m) =>
+              m.kind === 'text' &&
+              m.role === 'user' &&
+              String(m.content || '').includes('[Images provided at the following paths:'),
+          ).length;
+          chatImagesDebugLog('fetchFromServer', {
+            sessionId,
+            offset: opts.offset ?? 0,
+            optsProjectPath: opts.projectPath ? String(opts.projectPath).slice(0, 160) : '(empty)',
+            apiTotal: messages.length,
+            apiUserWithPathNote: apiPathNote,
+            apiUserWithImages: countUserWithImages(messages),
+            rtLen: rtSnapshot.length,
+            rtUserWithImages: countUserWithImages(rtSnapshot),
+            mergedUserWithImages: countUserWithImages(mergedMessages),
+          });
+        }
+
+        // Initial page load: treat server as source of truth, but keep user image
+        // optimistic rows so thumbnails don't disappear when API lacks inline images.
+        if ((opts.offset ?? 0) === 0) {
+          slot.realtimeMessages = retainRealtimeImageRows(slot.realtimeMessages);
+        }
+        slot.serverMessages = mergedMessages;
+        slot.total = data.total ?? messages.length;
+        slot.hasMore = Boolean(data.hasMore);
+        slot.offset = (opts.offset ?? 0) + messages.length;
+        slot.fetchedAt = Date.now();
+        slot.status = 'idle';
+        recomputeMergedIfNeeded(slot);
+        if (data.tokenUsage) {
+          slot.tokenUsage = data.tokenUsage;
+        }
+        // 服务端已含图时，清理已匹配的 realtime 图片行，防止同条消息重复显示。
+        slot.realtimeMessages = dropRealtimeImageRowsAlreadyOnServer(
+          slot.serverMessages,
+          slot.realtimeMessages,
+        );
+        recomputeMergedIfNeeded(slot);
+
+        notify(sessionId);
+        inflight.delete(key);
+        return slot;
+      } catch (error) {
+        console.error(`[SessionStore] fetch failed for ${sessionId}:`, error);
+        slot.status = 'error';
+        notify(sessionId);
+        inflight.delete(key);
+        return slot;
       }
+    })();
 
-      const qs = params.toString();
-      const url = `/api/sessions/${encodeURIComponent(sessionId)}/messages${qs ? `?${qs}` : ''}`;
-      const response = await authenticatedFetch(url);
-
-      if (!response.ok) {
-        throw new Error(`HTTP ${response.status}`);
-      }
-
-      const data = await response.json();
-      const messages: NormalizedMessage[] = data.messages || [];
-      const rtSnapshot = [...slot.realtimeMessages];
-      const mergedMessages = mergeUserImagesFromRealtime(messages, rtSnapshot);
-
-      if (isChatImagesDebugEnabled()) {
-        const apiPathNote = messages.filter(
-          (m) =>
-            m.kind === 'text' &&
-            m.role === 'user' &&
-            String(m.content || '').includes('[Images provided at the following paths:'),
-        ).length;
-        chatImagesDebugLog('fetchFromServer', {
-          sessionId,
-          offset: opts.offset ?? 0,
-          optsProjectPath: opts.projectPath ? String(opts.projectPath).slice(0, 160) : '(empty)',
-          apiTotal: messages.length,
-          apiUserWithPathNote: apiPathNote,
-          apiUserWithImages: countUserWithImages(messages),
-          rtLen: rtSnapshot.length,
-          rtUserWithImages: countUserWithImages(rtSnapshot),
-          mergedUserWithImages: countUserWithImages(mergedMessages),
-        });
-      }
-
-      // Initial page load: treat server as source of truth, but keep user image
-      // optimistic rows so thumbnails don't disappear when API lacks inline images.
-      if ((opts.offset ?? 0) === 0) {
-        slot.realtimeMessages = retainRealtimeImageRows(slot.realtimeMessages);
-      }
-      slot.serverMessages = mergedMessages;
-      slot.total = data.total ?? messages.length;
-      slot.hasMore = Boolean(data.hasMore);
-      slot.offset = (opts.offset ?? 0) + messages.length;
-      slot.fetchedAt = Date.now();
-      slot.status = 'idle';
-      recomputeMergedIfNeeded(slot);
-      if (data.tokenUsage) {
-        slot.tokenUsage = data.tokenUsage;
-      }
-      // 服务端已含图时，清理已匹配的 realtime 图片行，防止同条消息重复显示。
-      slot.realtimeMessages = dropRealtimeImageRowsAlreadyOnServer(
-        slot.serverMessages,
-        slot.realtimeMessages,
-      );
-      recomputeMergedIfNeeded(slot);
-
-      notify(sessionId);
-      return slot;
-    } catch (error) {
-      console.error(`[SessionStore] fetch failed for ${sessionId}:`, error);
-      slot.status = 'error';
-      notify(sessionId);
-      return slot;
-    }
+    inflight.set(key, { promise: requestPromise, timestamp: Date.now() });
+    return requestPromise as Promise<SessionSlot>;
   }, [getSlot, notify]);
 
   /**
@@ -545,6 +596,7 @@ export function useSessionStore() {
 
   /**
    * Re-fetch serverMessages from the unified endpoint (e.g., on projects_updated).
+   * Includes inflight lock and debounce to prevent concurrent/repeated requests.
    */
   const refreshFromServer = useCallback(async (
     sessionId: string,
@@ -552,60 +604,97 @@ export function useSessionStore() {
       provider?: SessionProvider;
       projectName?: string;
       projectPath?: string;
+      /** Force refresh even if recently fetched */
+      force?: boolean;
     } = {},
   ) => {
-    const slot = getSlot(sessionId);
-    try {
-      const params = new URLSearchParams();
-      if (opts.provider) params.append('provider', opts.provider);
-      if (opts.projectName) params.append('projectName', opts.projectName);
-      if (opts.projectPath) params.append('projectPath', opts.projectPath);
+    const key = getSessionStoreKey(sessionId);
+    const inflight = inflightRef.current;
 
-      const qs = params.toString();
-      const url = `/api/sessions/${encodeURIComponent(sessionId)}/messages${qs ? `?${qs}` : ''}`;
-      const response = await authenticatedFetch(url);
-
-      if (!response.ok) throw new Error(`HTTP ${response.status}`);
-      const data = await response.json();
-
-      const rtSnapshot = [...slot.realtimeMessages];
-      const incoming = (data.messages || []) as NormalizedMessage[];
-      const mergedRefresh = mergeUserImagesFromRealtime(incoming, rtSnapshot);
-      if (isChatImagesDebugEnabled()) {
-        const apiPathNote = incoming.filter(
-          (m: NormalizedMessage) =>
-            m.kind === 'text' &&
-            m.role === 'user' &&
-            String(m.content || '').includes('[Images provided at the following paths:'),
-        ).length;
-        chatImagesDebugLog('refreshFromServer', {
-          sessionId,
-          optsProjectPath: opts.projectPath ? String(opts.projectPath).slice(0, 160) : '(empty)',
-          apiTotal: incoming.length,
-          apiUserWithPathNote: apiPathNote,
-          apiUserWithImages: countUserWithImages(incoming),
-          rtLen: rtSnapshot.length,
-          rtUserWithImages: countUserWithImages(rtSnapshot),
-          mergedUserWithImages: countUserWithImages(mergedRefresh),
-        });
+    // Check for in-flight request - return existing promise if one exists
+    const existing = inflight.get(key);
+    if (existing) {
+      const elapsed = Date.now() - existing.timestamp;
+      // If request started < 2s ago, reuse it
+      if (elapsed < 2000) {
+        chatImagesDebugLog('[SessionStore] reuse inflight refresh', { sessionId, elapsedMs: elapsed });
+        return;
       }
-      slot.serverMessages = mergedRefresh;
-      slot.total = data.total ?? slot.serverMessages.length;
-      slot.hasMore = Boolean(data.hasMore);
-      slot.fetchedAt = Date.now();
-      // Drop most realtime rows once server catches up, but preserve user image
-      // rows used to patch API user bubbles in remote SSH mode.
-      slot.realtimeMessages = retainRealtimeImageRows(slot.realtimeMessages);
-      // 若服务端已经返回了对应带图用户行，则移除该 realtime 行避免重复显示。
-      slot.realtimeMessages = dropRealtimeImageRowsAlreadyOnServer(
-        slot.serverMessages,
-        slot.realtimeMessages,
-      );
-      recomputeMergedIfNeeded(slot);
-      notify(sessionId);
-    } catch (error) {
-      console.error(`[SessionStore] refresh failed for ${sessionId}:`, error);
     }
+
+    // Check if recently fetched (debounce) - skip if data is fresh enough and total unchanged
+    const slot = getSlot(sessionId);
+    if (!opts.force) {
+      const fetchedElapsed = Date.now() - slot.fetchedAt;
+      if (fetchedElapsed < MIN_REFRESH_INTERVAL_MS) {
+        chatImagesDebugLog('[SessionStore] skip refresh (recently fetched)', {
+          sessionId,
+          elapsedMs: fetchedElapsed,
+          thresholdMs: MIN_REFRESH_INTERVAL_MS,
+        });
+        return;
+      }
+    }
+
+    const requestPromise = (async () => {
+      try {
+        const params = new URLSearchParams();
+        if (opts.provider) params.append('provider', opts.provider);
+        if (opts.projectName) params.append('projectName', opts.projectName);
+        if (opts.projectPath) params.append('projectPath', opts.projectPath);
+
+        const qs = params.toString();
+        const url = `/api/sessions/${encodeURIComponent(sessionId)}/messages${qs ? `?${qs}` : ''}`;
+        const response = await authenticatedFetch(url);
+
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        const data = await response.json();
+
+        const rtSnapshot = [...slot.realtimeMessages];
+        const incoming = (data.messages || []) as NormalizedMessage[];
+        const mergedRefresh = mergeUserImagesFromRealtime(incoming, rtSnapshot);
+        if (isChatImagesDebugEnabled()) {
+          const apiPathNote = incoming.filter(
+            (m: NormalizedMessage) =>
+              m.kind === 'text' &&
+              m.role === 'user' &&
+              String(m.content || '').includes('[Images provided at the following paths:'),
+          ).length;
+          chatImagesDebugLog('refreshFromServer', {
+            sessionId,
+            optsProjectPath: opts.projectPath ? String(opts.projectPath).slice(0, 160) : '(empty)',
+            apiTotal: incoming.length,
+            apiUserWithPathNote: apiPathNote,
+            apiUserWithImages: countUserWithImages(incoming),
+            rtLen: rtSnapshot.length,
+            rtUserWithImages: countUserWithImages(rtSnapshot),
+            mergedUserWithImages: countUserWithImages(mergedRefresh),
+          });
+        }
+        slot.serverMessages = mergedRefresh;
+        slot.total = data.total ?? slot.serverMessages.length;
+        slot.hasMore = Boolean(data.hasMore);
+        slot.fetchedAt = Date.now();
+        // Drop most realtime rows once server catches up, but preserve user image
+        // rows used to patch API user bubbles in remote SSH mode.
+        slot.realtimeMessages = retainRealtimeImageRows(slot.realtimeMessages);
+        // 若服务端已经返回了对应带图用户行，则移除该 realtime 行避免重复显示。
+        slot.realtimeMessages = dropRealtimeImageRowsAlreadyOnServer(
+          slot.serverMessages,
+          slot.realtimeMessages,
+        );
+        recomputeMergedIfNeeded(slot);
+        notify(sessionId);
+        inflight.delete(key);
+      } catch (error) {
+        console.error(`[SessionStore] refresh failed for ${sessionId}:`, error);
+        inflight.delete(key);
+      }
+    })();
+
+    inflight.set(key, { promise: requestPromise, timestamp: Date.now() });
+    await requestPromise;
+    return slot;
   }, [getSlot, notify]);
 
   /**
