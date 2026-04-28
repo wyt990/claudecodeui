@@ -1,12 +1,29 @@
 /**
- * 与本地 claude-sdk / 远程 SSH 注入的「图片路径说明」后缀一致，用于气泡内隐藏冗长路径、仅保留用户正文。
+ * Strip image safety guard and paths note from user messages for display.
+ * Re-exports from shared/imageContentGuard.js for centralized control.
  */
-const IMAGE_PATHS_NOTE_RE = /\n\n\[Images provided at the following paths:\][\s\S]*$/;
-const IMAGE_SAFETY_GUARD_RE = /\n?\[IMAGE CONTENT SAFETY GUARD\][\s\S]*?(?=\n\[Images provided at the following paths:\]|$)/g;
 
+import {
+  stripImageSafetyGuardAndPathsNote,
+} from '../../../../shared/imageContentGuard';
+
+export {
+  stripImageSafetyGuardAndPathsNote,
+  stripImagePathsNote,
+  stripImageSafetyGuard,
+  hasImageSafetyGuard,
+  hasImagePathsNote,
+  IMAGE_SAFETY_GUARD_HEADER,
+  IMAGE_SAFETY_GUARD_STRIP_RE,
+  IMAGE_PATHS_NOTE_STRIP_RE,
+} from '../../../../shared/imageContentGuard';
+
+/**
+ * Strip both safety guard and image paths note from text.
+ * Alias for backward compatibility.
+ * @param text - Original text (may contain guard and paths)
+ * @returns Cleaned text without guard and paths
+ */
 export function stripClaudeImagePathsNote(text: string): string {
-  return String(text || '')
-    .replace(IMAGE_PATHS_NOTE_RE, '')
-    .replace(IMAGE_SAFETY_GUARD_RE, '')
-    .trimEnd();
+  return stripImageSafetyGuardAndPathsNote(text);
 }

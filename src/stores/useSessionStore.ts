@@ -128,14 +128,9 @@ function toEpochMs(ts: string | undefined): number {
 }
 
 function normalizeUserImageComparableText(raw: string): string {
-  const noPathNote = stripClaudeImagePathsNote(String(raw || ''));
-  // 图片轮次会自动注入 safety guard；匹配/去重时应忽略，避免
-  // realtime(原始输入) 与 server(注入后文本) 被判定为不同消息。
-  const noSafetyGuard = noPathNote.replace(
-    /\n?\[IMAGE CONTENT SAFETY GUARD\][\s\S]*?(?=\n\[Images provided at the following paths:\]|$)/g,
-    '',
-  );
-  return noSafetyGuard.trim();
+  // stripClaudeImagePathsNote already handles both safety guard and paths note
+  // 使用统一函数剥离安全护栏和路径说明，确保 realtime(原始输入) 与 server(注入后文本) 匹配
+  return stripClaudeImagePathsNote(String(raw || ''));
 }
 
 function userImageDisplayKey(m: NormalizedMessage): string | null {
