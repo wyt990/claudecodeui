@@ -8,6 +8,8 @@
 import { getSessionMessages } from '../../projects.js';
 import { createNormalizedMessage, generateMessageId } from '../types.js';
 import { isInternalContent } from '../utils.js';
+import { enrichClaudeUserImagesFromDisk } from './enrich-user-images-from-disk.js';
+import { chatImagesDebugLog, isChatImagesDebugEnabled } from './chat-images-debug.js';
 
 const PROVIDER = 'claude';
 
@@ -277,6 +279,22 @@ export const claudeAdapter = {
       return { messages: [], total: 0, hasMore: false, offset: 0, limit: null };
     }
 
-    return normalizeClaudeJsonlToApi(result, sessionId);
+    const api = normalizeClaudeJsonlToApi(result, sessionId);
+    const { projectPath } = opts;
+    if (isChatImagesDebugEnabled()) {
+      chatImagesDebugLog('fetchHistory', {
+        sessionId,
+        projectName,
+        projectPath: projectPath ? String(projectPath).slice(0, 200) : '(missing)',
+        messageCount: api.messages?.length ?? 0,
+        willEnrich: Boolean(projectPath && api.messages?.length),
+      });
+    }
+    if (projectPath && api.messages?.length) {
+      api.messages = await enrichClaudeUserImagesFromDisk(api.messages, projectPath);
+    } else if (isChatImagesDebugEnabled() && api.messages?.length) {
+      chatImagesDebugLog('fetchHistory: skip disk enrich (no projectPath or no messages)');
+    }
+    return api;
   },
 };

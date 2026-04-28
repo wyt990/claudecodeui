@@ -25,6 +25,8 @@ import {
 } from './utils/claude-list-models-cli.js';
 import { getEnvDefaultOpenAICompatModel, isClaudeOpenAICompatMode } from './utils/claude-openai-env.js';
 import { fetchOpenAIModelIdsOnce } from './utils/claude-openai-models.js';
+import { buildClaudeImagePathsSuffix } from './utils/claude-image-prompt-note.js';
+import { buildImageContentBlocksFromDataUrls } from './utils/claude-image-blocks.js';
 import {
   createNotificationEvent,
   notifyRunFailed,
@@ -225,6 +227,27 @@ function matchesToolPermission(entry, toolName, input) {
   return false;
 }
 
+/** 与 `remote-claude-ssh-ws` 的 `--resume` 规则一致；占位 id 不可传给 Agent SDK */
+const SDK_RESUME_SESSION_ID_RE = /^[a-zA-Z0-9_.\-:]+$/;
+
+/**
+ * @param {unknown} sessionId
+ * @returns {string | null} 可传给 SDK `resume` 的真实会话 id，否则 null
+ */
+function claudeSdkResumeSessionId(sessionId) {
+  if (sessionId == null) {
+    return null;
+  }
+  const s = String(sessionId).trim();
+  if (!s || s.startsWith('new-session-') || s.startsWith('remote-sess-') || s.length > 280) {
+    return null;
+  }
+  if (!SDK_RESUME_SESSION_ID_RE.test(s)) {
+    return null;
+  }
+  return s;
+}
+
 /**
  * Maps CLI options to SDK-compatible options format
  * @param {Object} options - CLI options
@@ -297,9 +320,10 @@ function mapCliOptionsToSDK(options = {}) {
   // This loads CLAUDE.md from project, user (~/.config/claude/CLAUDE.md), and local directories
   sdkOptions.settingSources = ['project', 'user', 'local'];
 
-  // Map resume session
-  if (sessionId) {
-    sdkOptions.resume = sessionId;
+  // Map resume session（勿把前端占位 `new-session-*` / `remote-sess-*` 传给 CLI，否则会立即 exit 1）
+  const resumableId = claudeSdkResumeSessionId(sessionId);
+  if (resumableId && options.resume !== false) {
+    sdkOptions.resume = resumableId;
   }
 
   return sdkOptions;
@@ -412,6 +436,23 @@ function extractTokenBudget(resultMessage) {
  * @param {string} cwd - Working directory for temp file creation
  * @returns {Promise<Object>} {modifiedCommand, tempImagePaths, tempDir}
  */
+/**
+ * First user turn as Agent SDK expects for multimodal input (same envelope as
+ * string prompts: `session_id: ''` until system init assigns the session).
+ * @param {Array<Record<string, unknown>>} content
+ */
+async function* createMultimodalFirstUserMessageIterable(content) {
+  yield {
+    type: 'user',
+    parent_tool_use_id: null,
+    session_id: '',
+    message: {
+      role: 'user',
+      content
+    }
+  };
+}
+
 async function handleImages(command, images, cwd) {
   const tempImagePaths = [];
   let tempDir = null;
@@ -426,6 +467,8 @@ async function handleImages(command, images, cwd) {
     tempDir = path.join(workingDir, '.tmp', 'images', Date.now().toString());
     await fs.mkdir(tempDir, { recursive: true });
 
+    const batchId = crypto.randomBytes(8).toString('hex');
+
     // Save each image to a temp file
     for (const [index, image] of images.entries()) {
       // Extract base64 data and mime type
@@ -437,19 +480,23 @@ async function handleImages(command, images, cwd) {
 
       const [, mimeType, base64Data] = matches;
       const extension = mimeType.split('/')[1] || 'png';
-      const filename = `image_${index}.${extension}`;
+      const filename = `ccli-img-${batchId}-${index}.${extension}`;
       const filepath = path.join(tempDir, filename);
 
       // Write base64 data to file
-      await fs.writeFile(filepath, Buffer.from(base64Data, 'base64'));
+      const buf = Buffer.from(base64Data, 'base64');
+      await fs.writeFile(filepath, buf);
+      const back = await fs.readFile(filepath);
+      if (!Buffer.isBuffer(back) || back.length !== buf.length || !back.equals(buf)) {
+        throw new Error(`Local image verify failed after write: ${filepath}`);
+      }
       tempImagePaths.push(filepath);
     }
 
     // Include the full image paths in the prompt
     let modifiedCommand = command;
     if (tempImagePaths.length > 0 && command && command.trim()) {
-      const imageNote = `\n\n[Images provided at the following paths:]\n${tempImagePaths.map((p, i) => `${i + 1}. ${p}`).join('\n')}`;
-      modifiedCommand = command + imageNote;
+      modifiedCommand = command + buildClaudeImagePathsSuffix(tempImagePaths);
     }
 
     // Images processed
@@ -591,11 +638,39 @@ async function queryClaudeSDK(command, options = {}, ws) {
       sdkOptions.mcpServers = mcpServers;
     }
 
-    // Handle images - save to temp files and modify prompt
-    const imageResult = await handleImages(command, options.images, options.cwd);
-    const finalCommand = imageResult.modifiedCommand;
-    tempImagePaths = imageResult.tempImagePaths;
-    tempDir = imageResult.tempDir;
+    // Images: prefer Agent SDK multimodal (base64 blocks), aligned with claude-code
+    // `processTextPrompt` + `buildImageContentBlocks`. Fall back to temp files + path
+    // suffix only when uploads are present but none parse as data URLs.
+    const imageBlocks = buildImageContentBlocksFromDataUrls(options.images);
+    const trimmedCommand = String(command || '').trim();
+    const useMultimodalPrompt =
+      Array.isArray(options.images) && options.images.length > 0 && imageBlocks.length > 0;
+
+    let finalCommand;
+    if (useMultimodalPrompt) {
+      finalCommand = null;
+      tempImagePaths = [];
+      tempDir = null;
+    } else {
+      const imageResult = await handleImages(command, options.images, options.cwd);
+      finalCommand = imageResult.modifiedCommand;
+      tempImagePaths = imageResult.tempImagePaths;
+      tempDir = imageResult.tempDir;
+    }
+
+    const multimodalContent = useMultimodalPrompt
+      ? [
+          ...(trimmedCommand ? [{ type: 'text', text: String(command || '') }] : []),
+          ...imageBlocks
+        ]
+      : null;
+
+    const makeQueryPrompt = () => {
+      if (useMultimodalPrompt && multimodalContent) {
+        return createMultimodalFirstUserMessageIterable(multimodalContent);
+      }
+      return finalCommand;
+    };
 
     sdkOptions.hooks = {
       Notification: [{
@@ -696,7 +771,7 @@ async function queryClaudeSDK(command, options = {}, ws) {
     let queryInstance;
     try {
       queryInstance = query({
-        prompt: finalCommand,
+        prompt: makeQueryPrompt(),
         options: sdkOptions
       });
     } catch (hookError) {
@@ -705,7 +780,7 @@ async function queryClaudeSDK(command, options = {}, ws) {
       console.warn('Failed to initialize Claude query with hooks, retrying without hooks:', hookError?.message || hookError);
       delete sdkOptions.hooks;
       queryInstance = query({
-        prompt: finalCommand,
+        prompt: makeQueryPrompt(),
         options: sdkOptions
       });
     }

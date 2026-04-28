@@ -67,7 +67,7 @@ export function startPluginServer(name, pluginDir, serverEntry) {
               runningPlugins.delete(name);
             });
 
-            console.log(`[Plugins] Server started for "${name}" on port ${msg.port}`);
+            // console.log(`[Plugins] Server started for "${name}" on port ${msg.port}`);
             resolve(msg.port);
           }
         } catch {

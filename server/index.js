@@ -71,6 +71,7 @@ import sshServersRoutes from './routes/ssh-servers.js';
 import remoteServerClaudeSettingsRoutes from './routes/remote-server-claude-settings.js';
 import messagesRoutes from './routes/messages.js';
 import { createNormalizedMessage } from './providers/types.js';
+import { chatImagesDebugLog } from './providers/claude/chat-images-debug.js';
 import { startEnabledPluginServers, stopAllPlugins, getPluginPort } from './utils/plugin-process-manager.js';
 import { initializeDatabase, sessionNamesDb, applyCustomSessionNames, sshServersDb } from './database/db.js';
 import { configureWebPush } from './services/vapid-keys.js';
@@ -330,7 +331,7 @@ function shouldAutoOpenUrlFromOutput(value = '') {
 const wss = new WebSocketServer({
     server,
     verifyClient: (info) => {
-        console.log('WebSocket connection attempt to:', info.req.url);
+        // console.log('WebSocket connection attempt to:', info.req.url);
 
         // Platform mode: always allow connection
         if (IS_PLATFORM) {
@@ -340,7 +341,7 @@ const wss = new WebSocketServer({
                 return false;
             }
             info.req.user = user;
-            console.log('[OK] Platform mode WebSocket authenticated for user:', user.username);
+            // console.log('[OK] Platform mode WebSocket authenticated for user:', user.username);
             return true;
         }
 
@@ -359,7 +360,7 @@ const wss = new WebSocketServer({
 
         // Store user info in the request for later use
         info.req.user = user;
-        console.log('[OK] WebSocket authenticated for user:', user.username);
+        // console.log('[OK] WebSocket authenticated for user:', user.username);
         return true;
     }
 });
@@ -557,9 +558,9 @@ app.get('/api/projects', authenticateToken, async (req, res) => {
                         applyCustomSessionNames(req.user.id, proj.sessions, 'claude');
                     }
                 }
-                console.log(
-                    `[api/projects] remote ok userId=${req.user.id} serverId=${scope.serverId} count=${Array.isArray(projects) ? projects.length : 0}`,
-                );
+                //console.log(
+                //    `[api/projects] remote ok userId=${req.user.id} serverId=${scope.serverId} count=${Array.isArray(projects) ? projects.length : 0}`,
+                //);
                 res.json(projects);
             } catch (e) {
                 if (e?.code === 'SSH_NO_SECRETS' || e?.code === 'SSH_DECRYPT_FAILED') {
@@ -1190,9 +1191,9 @@ app.get('/api/projects/:projectName/files', authenticateToken, async (req, res) 
                     remoteResolvedRoot,
                     10,
                 );
-                console.log(
-                    `[api/projects/.../files] remote ok userId=${req.user.id} serverId=${scope.serverId} project=${req.params.projectName} root=${remoteResolvedRoot} entries=${files.length}`,
-                );
+                //console.log(
+                //    `[api/projects/.../files] remote ok userId=${req.user.id} serverId=${scope.serverId} project=${req.params.projectName} root=${remoteResolvedRoot} entries=${files.length}`,
+                //);
                 return res.json(files);
             } catch (e) {
                 if (e?.code === 'SSH_NO_SECRETS' || e?.code === 'SSH_DECRYPT_FAILED') {
@@ -2153,7 +2154,7 @@ function handlePluginWsProxy(clientWs, pathname) {
 // WebSocket connection handler that routes based on URL path
 wss.on('connection', (ws, request) => {
     const url = request.url;
-    console.log('[INFO] Client connected to:', url);
+    // console.log('[INFO] Client connected to:', url);
 
     // Parse URL to get pathname without query parameters
     const urlObj = new URL(url, 'http://localhost');
@@ -2241,13 +2242,36 @@ function handleChatConnection(ws, request) {
             data = JSON.parse(message);
 
             if (data.type === 'claude-command' && data.options?.useRemoteSsh) {
+                chatImagesDebugLog('WS claude-command (useRemoteSsh)', {
+                    imagesLength: Array.isArray(data.options?.images) ? data.options.images.length : 0,
+                });
                 const userId = request?.user?.userId ?? request?.user?.id;
                 if (!userId) {
                     writer.send(
                         createNormalizedMessage({ kind: 'error', content: 'Not authenticated for remote', provider: 'claude' }),
                     );
                 } else {
-                    await streamRemoteClaudePromptOverSsh({ userId, command: data.command, options: data.options, writer });
+                    // 远程始终走 SSH：`uploadRemoteClaudeImages` + `appendImagePathsToRemotePrompt`（与 enrich 解析一致）。
+                    // 若改走本机 Agent SDK 多模态，会话 jsonl 写在 CloudCLI 主机、与远端 GET messages 脱节，且 cwd 常为远端绝对路径时本机不可用。
+                    try {
+                        await streamRemoteClaudePromptOverSsh({ userId, command: data.command, options: data.options, writer });
+                        chatImagesDebugLog('WS claude-command (useRemoteSsh) handler finished', {
+                            sessionId: data.options?.sessionId,
+                            targetKey: data.options?.targetKey,
+                        });
+                    } catch (e) {
+                        const msg = e && typeof e === 'object' && 'message' in e ? String(e.message) : String(e);
+                        console.warn('[CloudCLI chat-images] streamRemoteClaudePromptOverSsh threw:', msg, e);
+                        writer.send(
+                            createNormalizedMessage({
+                                kind: 'error',
+                                content: msg || 'Remote SSH Claude failed',
+                                sessionId: data.options?.sessionId,
+                                provider: 'claude',
+                                targetKey: data.options?.targetKey,
+                            }),
+                        );
+                    }
                 }
             } else if (data.type === 'claude-command') {
                 console.log('[DEBUG] User message:', data.command || '[Continue/Resume]');

@@ -147,6 +147,14 @@
     "clearInput": "Eingabe leeren",
     "scrollToBottom": "Nach unten scrollen"
   },
+  "userImageLightbox": {
+    "title": "Image preview",
+    "closeBackdrop": "Close preview",
+    "close": "Close",
+    "prev": "Previous image",
+    "next": "Next image",
+    "counter": "{{current}} / {{total}}"
+  },
   "thinkingMode": {
     "selector": {
       "title": "Denkmodus",

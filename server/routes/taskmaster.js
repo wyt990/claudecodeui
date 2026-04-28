@@ -456,14 +456,14 @@ router.get('/installation-status', async (req, res) => {
         const mcpStatus = await detectTaskMasterMCPServer();
 
         if (scope.kind === 'remote' && installationStatus) {
-            console.log(
-                `[taskmaster] installation-status remote serverId=${scope.serverId} installed=${installationStatus.isInstalled}` +
-                    (installationStatus.detectedVia ? ` via=${installationStatus.detectedVia}` : '') +
-                    (installationStatus.installPath ? ` path=${installationStatus.installPath}` : '') +
-                    (!installationStatus.isInstalled && installationStatus.reason
-                        ? ` reason=${installationStatus.reason}`
-                        : ''),
-            );
+            // console.log(
+            //     `[taskmaster] installation-status remote serverId=${scope.serverId} installed=${installationStatus.isInstalled}` +
+            //         (installationStatus.detectedVia ? ` via=${installationStatus.detectedVia}` : '') +
+            //         (installationStatus.installPath ? ` path=${installationStatus.installPath}` : '') +
+            //         (!installationStatus.isInstalled && installationStatus.reason
+            //             ? ` reason=${installationStatus.reason}`
+            //             : ''),
+            // );
         }
 
         res.json({

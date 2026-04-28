@@ -1,4 +1,5 @@
 import { memo, useEffect, useMemo, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { useTranslation } from 'react-i18next';
 import SessionProviderLogo from '../../../llm-logo-provider/SessionProviderLogo';
 import type {
@@ -13,6 +14,8 @@ import type { Project } from '../../../../types/app';
 import { ToolRenderer, shouldHideToolResult } from '../../tools';
 import { Markdown } from './Markdown';
 import MessageCopyControl from './MessageCopyControl';
+import { stripClaudeImagePathsNote } from '../../utils/chatImagePaths';
+import { ChevronLeft, ChevronRight, X } from 'lucide-react';
 
 type DiffLine = {
   type: string;
@@ -72,7 +75,11 @@ const MessageComponent = memo(
   const [isExpanded, setIsExpanded] = useState(false);
   const permissionSuggestion = getClaudePermissionSuggestion(message, provider);
   const [permissionGrantState, setPermissionGrantState] = useState<PermissionGrantState>('idle');
-  const userCopyContent = String(message.content || '');
+  const userBodyText = useMemo(
+    () => stripClaudeImagePathsNote(String(message.content || '')),
+    [message.content],
+  );
+  const userCopyContent = userBodyText;
   const formattedMessageContent = useMemo(
     () => formatUsageLimitText(String(message.content || '')),
     [message.content]
@@ -84,6 +91,37 @@ const MessageComponent = memo(
     message.isToolUse && COPY_HIDDEN_TOOL_NAMES.has(String(message.toolName || ''))
   );
   const shouldShowUserCopyControl = message.type === 'user' && userCopyContent.trim().length > 0;
+
+  const [imageLightboxOpen, setImageLightboxOpen] = useState(false);
+  const [imageLightboxIndex, setImageLightboxIndex] = useState(0);
+  const userImages = message.images && message.images.length > 0 ? message.images : [];
+
+  useEffect(() => {
+    if (!imageLightboxOpen) {
+      return undefined;
+    }
+    const prevOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        setImageLightboxOpen(false);
+      }
+      if (e.key === 'ArrowLeft' && userImages.length > 1) {
+        e.preventDefault();
+        setImageLightboxIndex((i) => (i - 1 + userImages.length) % userImages.length);
+      }
+      if (e.key === 'ArrowRight' && userImages.length > 1) {
+        e.preventDefault();
+        setImageLightboxIndex((i) => (i + 1) % userImages.length);
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => {
+      document.body.style.overflow = prevOverflow;
+      window.removeEventListener('keydown', onKey);
+    };
+  }, [imageLightboxOpen, message.images?.length, userImages.length]);
   const shouldShowAssistantCopyControl = message.type === 'assistant' &&
     assistantCopyContent.trim().length > 0 &&
     !isCommandOrFileEditToolResponse;
@@ -136,22 +174,110 @@ const MessageComponent = memo(
         /* User message bubble on the right */
         <div className="flex w-full items-end space-x-0 sm:w-auto sm:max-w-[85%] sm:space-x-3 md:max-w-md lg:max-w-lg xl:max-w-xl">
           <div className="group flex-1 rounded-2xl rounded-br-md bg-blue-600 px-3 py-2 text-white shadow-sm sm:flex-initial sm:px-4">
-            <div className="whitespace-pre-wrap break-words text-sm">
-              {message.content}
-            </div>
-            {message.images && message.images.length > 0 && (
-              <div className="mt-2 grid grid-cols-2 gap-2">
-                {message.images.map((img, idx) => (
-                  <img
-                    key={img.name || idx}
-                    src={img.data}
-                    alt={img.name}
-                    className="h-auto max-w-full cursor-pointer rounded-lg transition-opacity hover:opacity-90"
-                    onClick={() => window.open(img.data, '_blank')}
-                  />
+            {userBodyText.trim().length > 0 ? (
+              <div className="whitespace-pre-wrap break-words text-sm">{userBodyText}</div>
+            ) : null}
+            {userImages.length > 0 ? (
+              <div
+                className={`grid gap-2 ${userImages.length === 1 ? 'grid-cols-1' : 'grid-cols-2 sm:max-w-sm'}`}
+              >
+                {userImages.map((img, idx) => (
+                  <button
+                    key={`${img.name || 'img'}-${idx}`}
+                    type="button"
+                    className="relative block overflow-hidden rounded-lg border border-white/20 bg-white/10 outline-none ring-offset-2 ring-offset-blue-600 focus-visible:ring-2 focus-visible:ring-white"
+                    onClick={() => {
+                      setImageLightboxIndex(idx);
+                      setImageLightboxOpen(true);
+                    }}
+                  >
+                    <img
+                      src={img.data}
+                      alt={img.name || `image-${idx + 1}`}
+                      className="h-28 w-full object-cover sm:h-32"
+                    />
+                  </button>
                 ))}
               </div>
-            )}
+            ) : null}
+            {imageLightboxOpen && userImages.length > 0 && typeof document !== 'undefined'
+              ? createPortal(
+                  <div
+                    role="dialog"
+                    aria-modal="true"
+                    aria-label={t('userImageLightbox.title', { defaultValue: 'Image preview' })}
+                    className="fixed inset-0 z-[120] flex items-center justify-center bg-black/88"
+                    onClick={() => setImageLightboxOpen(false)}
+                  >
+                    {/* 图片容器：适应图片大小，限制最大尺寸 */}
+                    <div
+                      className="relative flex max-h-[56.25vw] max-w-[85vw] flex-col items-center justify-center sm:max-h-[56.25vh] sm:max-w-[85vw] lg:max-w-[70vw]"
+                      onClick={(e) => e.stopPropagation()}
+                    >
+                      {/* 标题栏：固定背景色 */}
+                      <div className="flex w-full items-center justify-between rounded-t-lg bg-gray-900/95 px-3 py-2 text-white">
+                        <span className="text-sm opacity-90">
+                          {userImages.length > 1
+                            ? t('userImageLightbox.counter', {
+                                current: imageLightboxIndex + 1,
+                                total: userImages.length,
+                              })
+                            : '\u00a0'}
+                        </span>
+                        <button
+                          type="button"
+                          className="rounded-md bg-red-500/80 p-2 text-white hover:bg-red-600"
+                          onClick={(e) => {
+                            e.preventDefault();
+                            e.stopPropagation();
+                            setImageLightboxOpen(false);
+                          }}
+                          aria-label={t('userImageLightbox.close', { defaultValue: 'Close' })}
+                        >
+                          <X className="h-5 w-5" />
+                        </button>
+                      </div>
+                      {/* 图片区域 */}
+                      <div className="relative flex min-h-0 items-center justify-center rounded-b-lg bg-gray-800/50 px-2 pb-2">
+                        {userImages.length > 1 ? (
+                          <button
+                            type="button"
+                            className="absolute left-1 top-1/2 z-10 -translate-y-1/2 rounded-full bg-black/60 p-2 text-white hover:bg-black/80"
+                            aria-label={t('userImageLightbox.prev', { defaultValue: 'Previous image' })}
+                            onClick={(e) => {
+                              e.preventDefault();
+                              e.stopPropagation();
+                              setImageLightboxIndex((i) => (i - 1 + userImages.length) % userImages.length);
+                            }}
+                          >
+                            <ChevronLeft className="h-7 w-7" />
+                          </button>
+                        ) : null}
+                        <img
+                          src={userImages[imageLightboxIndex]?.data}
+                          alt={userImages[imageLightboxIndex]?.name || ''}
+                          className="max-h-[min(56.25vw,85vh)] max-w-full object-contain drop-shadow-lg sm:max-h-[min(56.25vh,85vh)]"
+                        />
+                        {userImages.length > 1 ? (
+                          <button
+                            type="button"
+                            className="absolute right-1 top-1/2 z-10 -translate-y-1/2 rounded-full bg-black/60 p-2 text-white hover:bg-black/80"
+                            aria-label={t('userImageLightbox.next', { defaultValue: 'Next image' })}
+                            onClick={(e) => {
+                              e.preventDefault();
+                              e.stopPropagation();
+                              setImageLightboxIndex((i) => (i + 1) % userImages.length);
+                            }}
+                          >
+                            <ChevronRight className="h-7 w-7" />
+                          </button>
+                        ) : null}
+                      </div>
+                    </div>
+                  </div>,
+                  document.body,
+                )
+              : null}
             <div className="mt-1 flex items-center justify-end gap-1 text-xs text-blue-100">
               {shouldShowUserCopyControl && (
                 <MessageCopyControl content={userCopyContent} messageType="user" />

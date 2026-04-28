@@ -8,6 +8,8 @@
  */
 
 import { useCallback, useMemo, useRef, useState } from 'react';
+import { stripClaudeImagePathsNote } from '../components/chat/utils/chatImagePaths';
+import { chatImagesDebugLog, isChatImagesDebugEnabled } from '../lib/chatImagesDebug';
 import type { SessionProvider } from '../types/app';
 import { authenticatedFetch } from '../utils/api';
 import { getSessionStoreKey } from '../utils/sessionStoreKey.js';
@@ -115,8 +117,74 @@ function computeMerged(server: NormalizedMessage[], realtime: NormalizedMessage[
   if (server.length === 0) return realtime;
   const serverIds = new Set(server.map(m => m.id));
   const extra = realtime.filter(m => !serverIds.has(m.id));
-  if (extra.length === 0) return server;
-  return [...server, ...extra];
+  const merged = extra.length === 0 ? server : [...server, ...extra];
+  return collapseDuplicateUserImageTurnsForDisplay(merged);
+}
+
+function toEpochMs(ts: string | undefined): number {
+  if (!ts) return NaN;
+  const n = Date.parse(ts);
+  return Number.isFinite(n) ? n : NaN;
+}
+
+function normalizeUserImageComparableText(raw: string): string {
+  const noPathNote = stripClaudeImagePathsNote(String(raw || ''));
+  // 图片轮次会自动注入 safety guard；匹配/去重时应忽略，避免
+  // realtime(原始输入) 与 server(注入后文本) 被判定为不同消息。
+  const noSafetyGuard = noPathNote.replace(
+    /\n?\[IMAGE CONTENT SAFETY GUARD\][\s\S]*?(?=\n\[Images provided at the following paths:\]|$)/g,
+    '',
+  );
+  return noSafetyGuard.trim();
+}
+
+function userImageDisplayKey(m: NormalizedMessage): string | null {
+  if (
+    m.kind !== 'text' ||
+    m.role !== 'user' ||
+    !Array.isArray(m.images) ||
+    m.images.length === 0
+  ) {
+    return null;
+  }
+  const text = normalizeUserImageComparableText(String(m.content || ''));
+  const first = String(m.images[0] || '');
+  // 仅用于 UI 兜底去重，不做持久化判断。
+  return `${text}@@${first.slice(0, 128)}`;
+}
+
+/**
+ * 兜底：折叠由自动重试导致的“连续重复用户带图消息”。
+ * 仅在以下条件同时满足时才去重：
+ * - 连续两条都是 user text + images
+ * - 去路径说明后的正文一致
+ * - 第一张图片签名一致
+ * - 时间戳间隔 <= 8 秒
+ */
+function collapseDuplicateUserImageTurnsForDisplay(messages: NormalizedMessage[]): NormalizedMessage[] {
+  if (messages.length <= 1) return messages;
+  const out: NormalizedMessage[] = [];
+  for (const cur of messages) {
+    const prev = out.length > 0 ? out[out.length - 1] : null;
+    if (!prev) {
+      out.push(cur);
+      continue;
+    }
+    const curKey = userImageDisplayKey(cur);
+    const prevKey = userImageDisplayKey(prev);
+    if (!curKey || !prevKey || curKey !== prevKey) {
+      out.push(cur);
+      continue;
+    }
+    const curTs = toEpochMs(cur.timestamp);
+    const prevTs = toEpochMs(prev.timestamp);
+    if (!Number.isFinite(curTs) || !Number.isFinite(prevTs) || Math.abs(curTs - prevTs) > 8_000) {
+      out.push(cur);
+      continue;
+    }
+    // 命中重复：丢弃后者，仅展示一条。
+  }
+  return out;
 }
 
 /**
@@ -131,6 +199,131 @@ function recomputeMergedIfNeeded(slot: SessionSlot): boolean {
   slot._lastRealtimeRef = slot.realtimeMessages;
   slot.merged = computeMerged(slot.serverMessages, slot.realtimeMessages);
   return true;
+}
+
+/**
+ * JSONL/API 用户气泡通常无 `images`（仅存路径说明），乐观 realtime 里才有 data URL。
+ * 在丢弃 realtime 前把图片按「去路径说明后的正文」对齐写回 server 副本，避免刷新后缩略图消失。
+ */
+function countUserWithImages(arr: NormalizedMessage[]): number {
+  return arr.filter((m) => m.kind === 'text' && m.role === 'user' && Array.isArray(m.images) && m.images.length > 0).length;
+}
+
+function mergeUserImagesFromRealtime(server: NormalizedMessage[], realtime: NormalizedMessage[]): NormalizedMessage[] {
+  const dbg = isChatImagesDebugEnabled();
+  const rtQueue = realtime.filter(
+    (m) =>
+      m.kind === 'text' &&
+      m.role === 'user' &&
+      Array.isArray(m.images) &&
+      m.images.length > 0,
+  );
+  if (rtQueue.length === 0) {
+    if (dbg) {
+      chatImagesDebugLog('merge: no realtime user rows with images', { serverLen: server.length });
+    }
+    return server;
+  }
+
+  let qi = 0;
+  let patched = false;
+  const out: NormalizedMessage[] = [];
+  for (const sm of server) {
+    if (
+      sm.kind !== 'text' ||
+      sm.role !== 'user' ||
+      (Array.isArray(sm.images) && sm.images.length > 0)
+    ) {
+      out.push(sm);
+      continue;
+    }
+    const sStrip = normalizeUserImageComparableText(String(sm.content || ''));
+    let assigned = false;
+    for (let j = qi; j < rtQueue.length; j++) {
+      const rt = rtQueue[j];
+      const rStrip = normalizeUserImageComparableText(String(rt.content || ''));
+      if (rStrip !== sStrip) continue;
+      qi = j + 1;
+      patched = true;
+      if (dbg) {
+        chatImagesDebugLog('merge: attached images to server user row', {
+          id: sm.id,
+          sStripPreview: sStrip.slice(0, 80),
+          imageCount: rt.images?.length ?? 0,
+        });
+      }
+      out.push({ ...sm, images: [...(rt.images as string[])] });
+      assigned = true;
+      break;
+    }
+    if (!assigned) {
+      if (dbg && sStrip.length > 0 && !Array.isArray(sm.images)) {
+        const hasPathNote = String(sm.content || '').includes('[Images provided at the following paths:');
+        if (hasPathNote) {
+          chatImagesDebugLog('merge: server user has path note but no strip match to rt', {
+            id: sm.id,
+            sStripPreview: sStrip.slice(0, 80),
+            rtQueueLen: rtQueue.length,
+            qi,
+          });
+        }
+      }
+      out.push(sm);
+    }
+  }
+  if (dbg) {
+    chatImagesDebugLog('merge: result', { patched, outUserWithImages: countUserWithImages(patched ? out : server) });
+  }
+  return patched ? out : server;
+}
+
+/**
+ * Refresh/fetch 后服务端通常已追平文本，但远端场景下用户图片常不在 API 行内（仅路径说明）。
+ * 仅保留「用户 text + images」的 realtime 行，避免缩略图被清空。
+ */
+function retainRealtimeImageRows(realtime: NormalizedMessage[]): NormalizedMessage[] {
+  return realtime.filter(
+    (m) =>
+      m.kind === 'text' &&
+      m.role === 'user' &&
+      Array.isArray(m.images) &&
+      m.images.length > 0,
+  );
+}
+
+/**
+ * 当服务端已返回同内容且含 images 的用户行时，剔除对应 realtime 图片行，避免重复显示。
+ */
+function dropRealtimeImageRowsAlreadyOnServer(
+  server: NormalizedMessage[],
+  realtime: NormalizedMessage[],
+): NormalizedMessage[] {
+  if (realtime.length === 0) return realtime;
+  const serverUserWithImages = server
+    .filter(
+      (m) =>
+        m.kind === 'text' &&
+        m.role === 'user' &&
+        Array.isArray(m.images) &&
+        m.images.length > 0,
+    )
+    .map((m) => normalizeUserImageComparableText(String(m.content || '')))
+    .filter(Boolean);
+  if (serverUserWithImages.length === 0) {
+    return realtime;
+  }
+  return realtime.filter((m) => {
+    if (
+      m.kind !== 'text' ||
+      m.role !== 'user' ||
+      !Array.isArray(m.images) ||
+      m.images.length === 0
+    ) {
+      return true;
+    }
+    const rtStrip = normalizeUserImageComparableText(String(m.content || ''));
+    return !serverUserWithImages.includes(rtStrip);
+  });
 }
 
 // ─── Stale threshold ─────────────────────────────────────────────────────────
@@ -214,14 +407,35 @@ export function useSessionStore() {
 
       const data = await response.json();
       const messages: NormalizedMessage[] = data.messages || [];
+      const rtSnapshot = [...slot.realtimeMessages];
+      const mergedMessages = mergeUserImagesFromRealtime(messages, rtSnapshot);
 
-      // Initial page load: treat server as source of truth. Realtime rows often use
-      // different ids than the API (e.g. after new-session-* -> UUID migration),
-      // so keeping both makes computeMerged show duplicates until a full refresh.
-      if ((opts.offset ?? 0) === 0) {
-        slot.realtimeMessages = [];
+      if (isChatImagesDebugEnabled()) {
+        const apiPathNote = messages.filter(
+          (m) =>
+            m.kind === 'text' &&
+            m.role === 'user' &&
+            String(m.content || '').includes('[Images provided at the following paths:'),
+        ).length;
+        chatImagesDebugLog('fetchFromServer', {
+          sessionId,
+          offset: opts.offset ?? 0,
+          optsProjectPath: opts.projectPath ? String(opts.projectPath).slice(0, 160) : '(empty)',
+          apiTotal: messages.length,
+          apiUserWithPathNote: apiPathNote,
+          apiUserWithImages: countUserWithImages(messages),
+          rtLen: rtSnapshot.length,
+          rtUserWithImages: countUserWithImages(rtSnapshot),
+          mergedUserWithImages: countUserWithImages(mergedMessages),
+        });
       }
-      slot.serverMessages = messages;
+
+      // Initial page load: treat server as source of truth, but keep user image
+      // optimistic rows so thumbnails don't disappear when API lacks inline images.
+      if ((opts.offset ?? 0) === 0) {
+        slot.realtimeMessages = retainRealtimeImageRows(slot.realtimeMessages);
+      }
+      slot.serverMessages = mergedMessages;
       slot.total = data.total ?? messages.length;
       slot.hasMore = Boolean(data.hasMore);
       slot.offset = (opts.offset ?? 0) + messages.length;
@@ -231,6 +445,12 @@ export function useSessionStore() {
       if (data.tokenUsage) {
         slot.tokenUsage = data.tokenUsage;
       }
+      // 服务端已含图时，清理已匹配的 realtime 图片行，防止同条消息重复显示。
+      slot.realtimeMessages = dropRealtimeImageRowsAlreadyOnServer(
+        slot.serverMessages,
+        slot.realtimeMessages,
+      );
+      recomputeMergedIfNeeded(slot);
 
       notify(sessionId);
       return slot;
@@ -275,7 +495,18 @@ export function useSessionStore() {
       const olderMessages: NormalizedMessage[] = data.messages || [];
 
       // Prepend older messages (they're earlier in the conversation)
-      slot.serverMessages = [...olderMessages, ...slot.serverMessages];
+      const combined = mergeUserImagesFromRealtime(
+        [...olderMessages, ...slot.serverMessages],
+        slot.realtimeMessages,
+      );
+      if (isChatImagesDebugEnabled()) {
+        chatImagesDebugLog('fetchMore', {
+          sessionId,
+          olderLen: olderMessages.length,
+          mergedUserWithImages: countUserWithImages(combined),
+        });
+      }
+      slot.serverMessages = combined;
       slot.hasMore = Boolean(data.hasMore);
       slot.offset = slot.offset + olderMessages.length;
       recomputeMergedIfNeeded(slot);
@@ -342,12 +573,39 @@ export function useSessionStore() {
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
       const data = await response.json();
 
-      slot.serverMessages = data.messages || [];
+      const rtSnapshot = [...slot.realtimeMessages];
+      const incoming = (data.messages || []) as NormalizedMessage[];
+      const mergedRefresh = mergeUserImagesFromRealtime(incoming, rtSnapshot);
+      if (isChatImagesDebugEnabled()) {
+        const apiPathNote = incoming.filter(
+          (m: NormalizedMessage) =>
+            m.kind === 'text' &&
+            m.role === 'user' &&
+            String(m.content || '').includes('[Images provided at the following paths:'),
+        ).length;
+        chatImagesDebugLog('refreshFromServer', {
+          sessionId,
+          optsProjectPath: opts.projectPath ? String(opts.projectPath).slice(0, 160) : '(empty)',
+          apiTotal: incoming.length,
+          apiUserWithPathNote: apiPathNote,
+          apiUserWithImages: countUserWithImages(incoming),
+          rtLen: rtSnapshot.length,
+          rtUserWithImages: countUserWithImages(rtSnapshot),
+          mergedUserWithImages: countUserWithImages(mergedRefresh),
+        });
+      }
+      slot.serverMessages = mergedRefresh;
       slot.total = data.total ?? slot.serverMessages.length;
       slot.hasMore = Boolean(data.hasMore);
       slot.fetchedAt = Date.now();
-      // drop realtime messages that the server has caught up with to prevent unbounded growth.
-      slot.realtimeMessages = [];
+      // Drop most realtime rows once server catches up, but preserve user image
+      // rows used to patch API user bubbles in remote SSH mode.
+      slot.realtimeMessages = retainRealtimeImageRows(slot.realtimeMessages);
+      // 若服务端已经返回了对应带图用户行，则移除该 realtime 行避免重复显示。
+      slot.realtimeMessages = dropRealtimeImageRowsAlreadyOnServer(
+        slot.serverMessages,
+        slot.realtimeMessages,
+      );
       recomputeMergedIfNeeded(slot);
       notify(sessionId);
     } catch (error) {

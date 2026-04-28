@@ -147,6 +147,14 @@
     "clearInput": "Очистить ввод",
     "scrollToBottom": "Прокрутить вниз"
   },
+  "userImageLightbox": {
+    "title": "Image preview",
+    "closeBackdrop": "Close preview",
+    "close": "Close",
+    "prev": "Previous image",
+    "next": "Next image",
+    "counter": "{{current}} / {{total}}"
+  },
   "thinkingMode": {
     "selector": {
       "title": "Режим размышления",

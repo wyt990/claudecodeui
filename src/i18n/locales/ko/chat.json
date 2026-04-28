@@ -129,6 +129,14 @@
     "clearInput": "입력 지우기",
     "scrollToBottom": "맨 아래로 스크롤"
   },
+  "userImageLightbox": {
+    "title": "Image preview",
+    "closeBackdrop": "Close preview",
+    "close": "Close",
+    "prev": "Previous image",
+    "next": "Next image",
+    "counter": "{{current}} / {{total}}"
+  },
   "thinkingMode": {
     "selector": {
       "title": "Thinking 모드",

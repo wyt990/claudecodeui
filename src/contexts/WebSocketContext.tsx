@@ -2,6 +2,7 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useRef, use
 import { useAuth } from '../components/auth/context/AuthContext';
 import { IS_PLATFORM } from '../constants/config';
 import { getTargetKey } from '../utils/targetKey.js';
+import { chatImagesDebugLog, isChatImagesDebugEnabled } from '../lib/chatImagesDebug';
 
 type WebSocketContextType = {
   ws: WebSocket | null;
@@ -78,6 +79,23 @@ const useWebSocketProviderState = (): WebSocketContextType => {
       websocket.onmessage = (event) => {
         try {
           const data = JSON.parse(event.data);
+          if (isChatImagesDebugEnabled()) {
+            const k = data?.kind ?? data?.type;
+            const prov = data?.provider;
+            const remoteTk = typeof data?.targetKey === 'string' && data.targetKey.startsWith('remote:');
+            if (prov === 'claude' || remoteTk || k === 'stream_delta' || k === 'stream_end' || k === 'complete' || k === 'session_created') {
+              const content = data?.content;
+              chatImagesDebugLog('[WS in]', {
+                kind: k,
+                sessionId: data?.sessionId,
+                targetKey: data?.targetKey,
+                provider: prov,
+                contentChars: typeof content === 'string' ? content.length : undefined,
+                exitCode: data?.exitCode,
+                newSessionId: data?.newSessionId,
+              });
+            }
+          }
           setLatestMessage(data);
         } catch (error) {
           console.error('Error parsing WebSocket message:', error);
@@ -105,6 +123,19 @@ const useWebSocketProviderState = (): WebSocketContextType => {
   }, [token]); // everytime token changes, we reconnect
 
   const sendMessage = useCallback((message: any) => {
+    if (isChatImagesDebugEnabled() && message?.type === 'claude-command') {
+      const o = message.options ?? {};
+      chatImagesDebugLog('[WS out] claude-command', {
+        useRemoteSsh: Boolean(o.useRemoteSsh),
+        serverId: o.serverId,
+        targetKey: o.targetKey,
+        sessionId: o.sessionId,
+        imagesCount: Array.isArray(o.images) ? o.images.length : 0,
+        commandChars: typeof message.command === 'string' ? message.command.length : 0,
+        model: o.model,
+        projectName: o.projectName,
+      });
+    }
     const socket = wsRef.current;
     if (socket && socket.readyState === WebSocket.OPEN) {
       socket.send(JSON.stringify(message));

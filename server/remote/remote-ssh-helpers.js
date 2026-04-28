@@ -47,10 +47,17 @@ export function bashSingleQuote(s) {
  * @type {string}
  */
 export const REMOTE_SSH_BASH_PATH_BOOTSTRAP = [
+  // Preserve original stdout/stderr. Some user profiles wrongly redirect
+  // descriptors in non-interactive shells, which would make SSH exec appear
+  // as "exit 0 but no output".
+  'exec 9>&1 8>&2',
   'set +eu',
   'for __f in /etc/profile "$HOME/.bash_profile" "$HOME/.bash_login" "$HOME/.profile" "$HOME/.bashrc"; do',
   '  [ -r "$__f" ] && . "$__f" 2>/dev/null',
   'done',
+  // Restore descriptors after sourcing profile scripts.
+  'exec 1>&9 2>&8',
+  'exec 9>&- 8>&-',
   'case ":${PATH:-}:" in *:"$HOME/.local/bin":*) ;; *) PATH="${PATH:+$PATH:}$HOME/.local/bin" ;; esac',
   'case ":${PATH:-}:" in *:"$HOME/bin":*) ;; *) PATH="${PATH:+$PATH:}$HOME/bin" ;; esac',
   'export PATH',

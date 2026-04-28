@@ -11,6 +11,7 @@
 
 import express from 'express';
 import { getProvider, getAllProviders } from '../providers/registry.js';
+import { chatImagesDebugLog, isChatImagesDebugEnabled } from '../providers/claude/chat-images-debug.js';
 import { parseTargetScope } from '../utils/parse-target-scope.js';
 import { getRemoteClaudeSessionMessages } from '../remote/remote-claude-data.js';
 
@@ -56,7 +57,25 @@ router.get('/:sessionId/messages', async (req, res) => {
         sessionId,
         limit,
         offset,
+        { projectPath },
       );
+      if (isChatImagesDebugEnabled() && provider === 'claude' && Array.isArray(result?.messages)) {
+        chatImagesDebugLog('GET messages query (remote SSH)', {
+          sessionId,
+          serverId: scope.serverId,
+          projectName: projectName || '(empty)',
+          limit,
+          offset,
+          note: 'remote：SFTP enrich（projectPath 优先，否则 jsonl 推断 cwd）',
+        });
+        const userWithImages = result.messages.filter(
+          (m) => m.kind === 'text' && m.role === 'user' && Array.isArray(m.images) && m.images.length > 0,
+        ).length;
+        chatImagesDebugLog('GET messages response (remote)', {
+          total: result.messages.length,
+          userRowsWithImages: userWithImages,
+        });
+      }
       return res.json(result);
     }
 
@@ -66,12 +85,32 @@ router.get('/:sessionId/messages', async (req, res) => {
       return res.status(400).json({ error: `Unknown provider: ${provider}. Available: ${available}` });
     }
 
+    if (isChatImagesDebugEnabled() && provider === 'claude') {
+      chatImagesDebugLog('GET messages query', {
+        sessionId,
+        projectName: projectName || '(empty)',
+        projectPath: projectPath ? String(projectPath).slice(0, 240) : '(empty)',
+        limit,
+        offset,
+      });
+    }
+
     const result = await adapter.fetchHistory(sessionId, {
       projectName,
       projectPath,
       limit,
       offset,
     });
+
+    if (isChatImagesDebugEnabled() && provider === 'claude' && Array.isArray(result?.messages)) {
+      const userWithImages = result.messages.filter(
+        (m) => m.kind === 'text' && m.role === 'user' && Array.isArray(m.images) && m.images.length > 0,
+      ).length;
+      chatImagesDebugLog('GET messages response', {
+        total: result.messages.length,
+        userRowsWithImages: userWithImages,
+      });
+    }
 
     return res.json(result);
   } catch (error) {

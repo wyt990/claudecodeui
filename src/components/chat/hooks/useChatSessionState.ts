@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import type { MutableRefObject } from 'react';
 import { authenticatedFetch } from '../../../utils/api';
-import type { ChatMessage, Provider } from '../types/types';
+import type { ChatImage, ChatMessage, Provider } from '../types/types';
 import type { Project, ProjectSession, SessionProvider } from '../../../types/app';
 import type { SessionStore, NormalizedMessage } from '../../../stores/useSessionStore';
 import { getTargetKey } from '../../../utils/targetKey.js';
@@ -77,12 +77,21 @@ function chatMessageToNormalized(
   if (msg.type === 'error') {
     return { ...base, kind: 'error', content: msg.content || '' } as NormalizedMessage;
   }
-  return {
+  const textPayload: NormalizedMessage = {
     ...base,
     kind: 'text',
     role: msg.type === 'user' ? 'user' : 'assistant',
     content: msg.content || '',
   } as NormalizedMessage;
+  if (msg.type === 'user' && Array.isArray(msg.images) && msg.images.length > 0) {
+    const urls = (msg.images as ChatImage[])
+      .map((im) => (im && typeof im.data === 'string' ? im.data.trim() : ''))
+      .filter(Boolean);
+    if (urls.length > 0) {
+      textPayload.images = urls;
+    }
+  }
+  return textPayload;
 }
 
 /* ------------------------------------------------------------------ */

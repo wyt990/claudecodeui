@@ -126,6 +126,14 @@
     "showAllCommands": "すべてのコマンドを表示",
     "claudeModel": "モデル"
   },
+  "userImageLightbox": {
+    "title": "Image preview",
+    "closeBackdrop": "Close preview",
+    "close": "Close",
+    "prev": "Previous image",
+    "next": "Next image",
+    "counter": "{{current}} / {{total}}"
+  },
   "thinkingMode": {
     "selector": {
       "title": "思考モード",

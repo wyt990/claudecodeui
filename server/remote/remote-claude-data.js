@@ -14,6 +14,8 @@ import {
 } from '../utils/claude-jsonl-cwd.js';
 import { detectTaskMasterFolderRemote } from '../services/taskmaster-detect-folder-remote.js';
 import { humanizeClaudeSessionSummary } from '../../shared/claudeSessionSummaryDisplay.js';
+import { enrichClaudeUserImagesFromRemoteSftp } from './remote-claude-user-images-enrich.js';
+import { chatImagesDebugLog, isChatImagesDebugEnabled } from '../providers/claude/chat-images-debug.js';
 
 const MAX_FILE_BYTES = 8 * 1024 * 1024;
 const CLAUDE_PROJECTS_REL = path.posix.join('.claude', 'projects');
@@ -469,6 +471,33 @@ export async function getRemoteClaudeSessionsInternal(sftp, home, projectName, l
 }
 
 /**
+ * 解析远端工程根（POSIX），用于校验 JSONL 里图片路径是否可读。
+ * @param {import('ssh2').SFTPWrapper} sftp
+ * @param {string} pdir
+ * @param {string} projectName
+ * @param {string} clientProjectPath 前端 query projectPath（多为远端绝对路径）
+ * @param {string} home
+ */
+async function resolveRemoteImageRootPosix(sftp, pdir, projectName, clientProjectPath, home) {
+  const raw = String(clientProjectPath || '').trim().replace(/\\/g, '/');
+  if (raw.startsWith('/')) {
+    return raw.replace(/\/+$/, '') || '/';
+  }
+  let inferred = await inferRemoteProjectCwdFromClaudeProjectDir(sftp, pdir, projectName);
+  inferred = String(inferred || '').trim().replace(/\\/g, '/');
+  if (inferred.startsWith('/')) {
+    return inferred.replace(/\/+$/, '') || '/';
+  }
+  if (inferred.length > 0) {
+    const joined = path.posix.join(home, inferred).replace(/\/+$/, '') || '/';
+    if (joined.startsWith('/')) {
+      return joined;
+    }
+  }
+  return null;
+}
+
+/**
  * 与 getSessionMessages（projects.js）等价的行收集 + 分页，再经 adapter 转 API。
  * @param {number} userId
  * @param {number} serverId
@@ -476,8 +505,10 @@ export async function getRemoteClaudeSessionsInternal(sftp, home, projectName, l
  * @param {string} sessionId
  * @param {number | null} limit
  * @param {number} offset
+ * @param {{ projectPath?: string }} [opts]
  */
-export async function getRemoteClaudeSessionMessages(userId, serverId, projectName, sessionId, limit, offset) {
+export async function getRemoteClaudeSessionMessages(userId, serverId, projectName, sessionId, limit, offset, opts = {}) {
+  const clientProjectPath = (opts && opts.projectPath) ? String(opts.projectPath) : '';
   return withRemoteSsh(userId, serverId, async ({ sftp, home }) => {
     const pdir = path.posix.join(home, CLAUDE_PROJECTS_REL, projectName);
     const fileList = await new Promise((resolve, reject) => {
@@ -542,26 +573,41 @@ export async function getRemoteClaudeSessionMessages(userId, serverId, projectNa
       (a, b) =>
         new Date(a.timestamp || 0).getTime() - new Date(b.timestamp || 0).getTime(),
     );
+    let api;
     if (limit === null) {
-      return normalizeClaudeJsonlToApi(
+      api = normalizeClaudeJsonlToApi(
         { messages: allRaw, total: allRaw.length, hasMore: false, offset, limit: null },
         sessionId,
       );
+    } else {
+      const total = allRaw.length;
+      const start = Math.max(0, total - offset - limit);
+      const end = total - offset;
+      const page = allRaw.slice(start, end);
+      api = normalizeClaudeJsonlToApi(
+        {
+          messages: page,
+          total,
+          hasMore: start > 0,
+          offset,
+          limit,
+        },
+        sessionId,
+      );
     }
-    const total = allRaw.length;
-    const start = Math.max(0, total - offset - limit);
-    const end = total - offset;
-    const page = allRaw.slice(start, end);
-    return normalizeClaudeJsonlToApi(
-      {
-        messages: page,
-        total,
-        hasMore: start > 0,
-        offset,
-        limit,
-      },
-      sessionId,
-    );
+
+    const imageRoot = await resolveRemoteImageRootPosix(sftp, pdir, projectName, clientProjectPath, home);
+    if (!imageRoot && isChatImagesDebugEnabled()) {
+      chatImagesDebugLog('remote enrich skipped: no POSIX project root', {
+        projectName,
+        hadClientProjectPath: Boolean(String(clientProjectPath || '').trim()),
+      });
+    }
+    if (imageRoot && api.messages && api.messages.length > 0) {
+      api.messages = await enrichClaudeUserImagesFromRemoteSftp(sftp, api.messages, imageRoot);
+    }
+
+    return api;
   });
 }
 

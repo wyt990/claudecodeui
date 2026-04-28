@@ -179,7 +179,7 @@ router.get('/:serverId/claude-list-models', async (req, res) => {
   if (!requireSshSecretsForApply(res, userId, serverId)) {
     return;
   }
-  console.log(`${LIST_M_LOG} userId=${userId} serverId=${serverId} step=request`);
+  // console.log(`${LIST_M_LOG} userId=${userId} serverId=${serverId} step=request`);
   try {
     const r = await runRemoteClaudecodeListModels(userId, serverId);
     return res.json({

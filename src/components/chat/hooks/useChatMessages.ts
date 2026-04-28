@@ -6,6 +6,8 @@
 import type { NormalizedMessage } from '../../../stores/useSessionStore';
 import type { ChatMessage, SubagentChildTool } from '../types/types';
 import { decodeHtmlEntities, unescapeWithMathProtection, formatUsageLimitText } from '../utils/chatFormatting';
+import { stripClaudeImagePathsNote } from '../utils/chatImagePaths';
+import type { ChatImage } from '../types/types';
 
 /**
  * Convert NormalizedMessage[] from the session store into ChatMessage[]
@@ -29,10 +31,25 @@ export function normalizedToChatMessages(messages: NormalizedMessage[]): ChatMes
     switch (msg.kind) {
       case 'text': {
         const content = msg.content || '';
-        if (!content.trim()) continue;
-
         if (msg.role === 'user') {
-          // Parse task notifications
+          const decoded = unescapeWithMathProtection(decodeHtmlEntities(content));
+          const displayContent = stripClaudeImagePathsNote(decoded);
+          const rawImages = Array.isArray(msg.images) ? msg.images : [];
+          const chatImages: ChatImage[] = rawImages
+            .map((entry: string | ChatImage, i: number) => {
+              if (typeof entry === 'string' && entry.startsWith('data:')) {
+                return { data: entry, name: `image_${i}.png` } as ChatImage;
+              }
+              if (entry && typeof entry === 'object' && 'data' in entry && typeof (entry as ChatImage).data === 'string') {
+                return entry as ChatImage;
+              }
+              return null;
+            })
+            .filter((x): x is ChatImage => x != null);
+          if (!displayContent.trim() && chatImages.length === 0) {
+            continue;
+          }
+          // Parse task notifications（用户气泡里极少见，保留原逻辑）
           const taskNotifRegex = /<task-notification>\s*<task-id>[^<]*<\/task-id>\s*<output-file>[^<]*<\/output-file>\s*<status>([^<]*)<\/status>\s*<summary>([^<]*)<\/summary>\s*<\/task-notification>/g;
           const taskNotifMatch = taskNotifRegex.exec(content);
           if (taskNotifMatch) {
@@ -46,11 +63,17 @@ export function normalizedToChatMessages(messages: NormalizedMessage[]): ChatMes
           } else {
             converted.push({
               type: 'user',
-              content: unescapeWithMathProtection(decodeHtmlEntities(content)),
+              content: displayContent,
               timestamp: msg.timestamp,
+              ...(chatImages.length > 0 ? { images: chatImages } : {}),
             });
           }
-        } else {
+          continue;
+        }
+
+        if (!content.trim()) continue;
+
+        if (msg.role === 'assistant') {
           let text = decodeHtmlEntities(content);
           text = unescapeWithMathProtection(text);
           text = formatUsageLimitText(text);
