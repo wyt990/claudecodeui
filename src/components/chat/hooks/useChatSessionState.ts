@@ -110,6 +110,8 @@ export function useChatSessionState({
   pendingViewSessionRef,
   sessionStore,
 }: UseChatSessionStateArgs) {
+  const isTemporarySessionId = (sessionId: string | null | undefined) =>
+    Boolean(sessionId && sessionId.startsWith('new-session-'));
   const [isLoading, setIsLoading] = useState(false);
   const [currentSessionId, setCurrentSessionId] = useState<string | null>(selectedSession?.id || null);
   const [isLoadingSessionMessages, setIsLoadingSessionMessages] = useState(false);
@@ -330,7 +332,20 @@ export function useChatSessionState({
 
   // Main session loading effect — store-based
   useEffect(() => {
+    // 有 pendingViewSessionRef 且 startedAt 在 30 秒内，说明用户正在发送消息创建新会话，保持 transient view
+    const now = Date.now();
+    const isPendingRecent =
+      pendingViewSessionRef.current &&
+      now - pendingViewSessionRef.current.startedAt < 30000;
+    const shouldKeepTransientConversationView =
+      Boolean(selectedProject) &&
+      !selectedSession &&
+      isPendingRecent;
+
     if (!selectedSession || !selectedProject) {
+      if (shouldKeepTransientConversationView) {
+        return;
+      }
       resetStreamingState();
       pendingViewSessionRef.current = null;
       setClaudeStatus(null);

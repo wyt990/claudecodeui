@@ -259,7 +259,9 @@ export function useChatRealtimeHandlers({
           );
         }
         onNavigateToSession?.(newSessionId);
-        if (fromWire.startsWith('new-session-') && typeof window !== 'undefined' && window.refreshProjects) {
+        // 无论 session_created 来自临时会话重映射还是直接创建，都刷新一次项目/会话列表，
+        // 避免“路由已跳到 /session/:id，但 selectedSession 尚未解析到”而停留在新会话视图。
+        if (typeof window !== 'undefined' && window.refreshProjects) {
           setTimeout(() => {
             window.refreshProjects?.();
           }, 400);
