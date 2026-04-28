@@ -19,6 +19,9 @@ import MainContentHeader from './subcomponents/MainContentHeader';
 import ShellSubTabBar from './subcomponents/ShellSubTabBar';
 import MainContentStateView from './subcomponents/MainContentStateView';
 import ErrorBoundary from './ErrorBoundary';
+import ImageViewer from '../../file-tree/view/ImageViewer';
+import { isImageFile } from '../../file-tree/utils/fileTreeUtils';
+import type { FileTreeImageSelection } from '../../file-tree/types/types';
 
 type TaskMasterContextValue = {
   currentProject?: Project | null;
@@ -83,6 +86,29 @@ function MainContent({
   });
 
   const [filesLayoutEditorFocus, setFilesLayoutEditorFocus] = useState(false);
+  const [selectedImage, setSelectedImage] = useState<FileTreeImageSelection | null>(null);
+
+  // 处理文件打开：图片文件使用 ImageViewer，其他文件使用代码编辑器
+  const handleFileOpenWithImage = useCallback(
+    (filePath: string, diffInfo?: unknown) => {
+      if (!selectedProject) {
+        handleFileOpen(filePath, diffInfo as any);
+        return;
+      }
+
+      if (isImageFile(filePath)) {
+        setSelectedImage({
+          name: filePath.split('/').pop() || filePath,
+          path: filePath,
+          projectPath: selectedProject.path,
+          projectName: selectedProject.name,
+        });
+      } else {
+        handleFileOpen(filePath, diffInfo as any);
+      }
+    },
+    [handleFileOpen, selectedProject],
+  );
 
   const handleTabChange = useCallback<Dispatch<SetStateAction<AppTab>>>((tab) => {
     if (typeof tab === 'function') {
@@ -204,7 +230,7 @@ function MainContent({
                 sendMessage={sendMessage}
                 webSocketConnected={webSocketConnected}
                 latestMessage={latestMessage}
-                onFileOpen={handleFileOpen}
+                onFileOpen={handleFileOpenWithImage}
                 onInputFocusChange={onInputFocusChange}
                 onSessionActive={onSessionActive}
                 onSessionInactive={onSessionInactive}
@@ -227,7 +253,7 @@ function MainContent({
 
           {activeTab === 'files' && (
             <div className="h-full overflow-hidden">
-              <FileTree selectedProject={selectedProject} onFileOpen={handleFileOpen} />
+              <FileTree selectedProject={selectedProject} onFileOpen={handleFileOpenWithImage} />
             </div>
           )}
 
@@ -257,7 +283,7 @@ function MainContent({
 
           {activeTab === 'git' && (
             <div className="h-full overflow-hidden">
-              <GitPanel selectedProject={selectedProject} isMobile={isMobile} onFileOpen={handleFileOpen} />
+              <GitPanel selectedProject={selectedProject} isMobile={isMobile} onFileOpen={handleFileOpenWithImage} />
             </div>
           )}
 
@@ -291,6 +317,11 @@ function MainContent({
           mainPaneHidden={hideMainFilePane}
         />
       </div>
+
+      {/* 图片查看器：点击图片文件时显示 */}
+      {selectedImage && (
+        <ImageViewer file={selectedImage} onClose={() => setSelectedImage(null)} />
+      )}
     </div>
   );
 }
