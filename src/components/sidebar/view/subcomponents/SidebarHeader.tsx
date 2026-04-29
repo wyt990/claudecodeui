@@ -22,6 +22,7 @@ type SidebarHeaderProps = {
   onCreateProject: () => void;
   createProjectDisabled?: boolean;
   onOpenRemoteProjectByPath?: () => void;
+  onOpenLocalProjectByPath?: () => void;
   isRemoteContext?: boolean;
   onCollapseSidebar: () => void;
   t: TFunction;
@@ -42,6 +43,7 @@ export default function SidebarHeader({
   onCreateProject,
   createProjectDisabled = false,
   onOpenRemoteProjectByPath,
+  onOpenLocalProjectByPath,
   isRemoteContext = false,
   onCollapseSidebar,
   t,
@@ -99,6 +101,17 @@ export default function SidebarHeader({
                 className="h-7 w-7 rounded-lg p-0 text-emerald-600 hover:bg-emerald-500/10 hover:text-emerald-700 dark:text-emerald-400 dark:hover:text-emerald-300"
                 onClick={onOpenRemoteProjectByPath}
                 title={t('tooltips.openRemoteByPath')}
+              >
+                <FolderInput className="h-3.5 w-3.5" />
+              </Button>
+            )}
+            {!isRemoteContext && searchMode === 'projects' && typeof onOpenLocalProjectByPath === 'function' && (
+              <Button
+                variant="ghost"
+                size="sm"
+                className="h-7 w-7 rounded-lg p-0 text-emerald-600 hover:bg-emerald-500/10 hover:text-emerald-700 dark:text-emerald-400 dark:hover:text-emerald-300"
+                onClick={onOpenLocalProjectByPath}
+                title={t('tooltips.openLocalByPath')}
               >
                 <FolderInput className="h-3.5 w-3.5" />
               </Button>
@@ -232,6 +245,16 @@ export default function SidebarHeader({
                 className="flex h-8 w-8 items-center justify-center rounded-lg border border-emerald-500/30 bg-emerald-500/10 text-emerald-600 transition-all active:scale-95 dark:text-emerald-400"
                 onClick={onOpenRemoteProjectByPath}
                 title={t('tooltips.openRemoteByPath')}
+              >
+                <FolderInput className="h-4 w-4" />
+              </button>
+            )}
+            {!isRemoteContext && searchMode === 'projects' && typeof onOpenLocalProjectByPath === 'function' && (
+              <button
+                type="button"
+                className="flex h-8 w-8 items-center justify-center rounded-lg border border-emerald-500/30 bg-emerald-500/10 text-emerald-600 transition-all active:scale-95 dark:text-emerald-400"
+                onClick={onOpenLocalProjectByPath}
+                title={t('tooltips.openLocalByPath')}
               >
                 <FolderInput className="h-4 w-4" />
               </button>

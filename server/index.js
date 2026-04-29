@@ -636,10 +636,12 @@ app.delete('/api/projects/:projectName/sessions/:sessionId', authenticateToken, 
         console.log(`[API] Deleting session: ${sessionId} from project: ${projectName}`);
         const scope = parseTargetScope(req);
         if (scope.kind === 'invalid') {
+            console.log(`[API] Invalid target scope: ${scope.error}`);
             return res.status(400).json({ error: scope.error, code: 'INVALID_TARGET' });
         }
         if (scope.kind === 'remote') {
             if (!sshServersDb.getServer(req.user.id, scope.serverId)) {
+                console.log(`[API] SSH server not found: ${scope.serverId}`);
                 return res.status(404).json({ error: 'SSH server not found' });
             }
             try {
@@ -648,6 +650,7 @@ app.delete('/api/projects/:projectName/sessions/:sessionId', authenticateToken, 
                 console.log(`[API] Remote session ${sessionId} deleted successfully`);
                 return res.json({ success: true });
             } catch (e) {
+                console.error(`[API] Error deleting remote session ${sessionId}:`, e);
                 if (e?.code === 'SSH_NO_SECRETS' || e?.code === 'SSH_DECRYPT_FAILED') {
                     return res.status(400).json({ error: e.message, code: e.code });
                 }
@@ -657,7 +660,6 @@ app.delete('/api/projects/:projectName/sessions/:sessionId', authenticateToken, 
                 if (e?.code === 'REMOTE_SESSION_FILE_TOO_LARGE') {
                     return res.status(413).json({ error: e.message });
                 }
-                console.error(`[API] Error deleting remote session ${req.params.sessionId}:`, e);
                 return res.status(500).json({ error: e.message || 'Failed to delete remote session' });
             }
         }

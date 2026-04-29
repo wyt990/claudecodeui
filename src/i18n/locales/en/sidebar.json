@@ -34,7 +34,15 @@
     "browseLoading": "Loading…",
     "claudeMdRemoteTitle": "CLAUDE.md on remote: {{name}}",
     "claudeMdRemotePathHint": "Uses this project’s directory on the SSH host (no manual path).",
-    "claudeMdRemoteBody": "Appends a marked block to CLAUDE.md in the project root, or creates the file if missing. You can save reusable snippets as templates below."
+    "claudeMdRemoteBody": "Appends a marked block to CLAUDE.md in the project root, or creates the file if missing. You can save reusable snippets as templates below.",
+    "openLocalPathDialogTitle": "Open local project",
+    "openLocalPathDialogHint": "Enter a local directory path or browse to it. Once added to the project list, you can manage it in this UI.",
+    "openLocalPathPlaceholder": "/path/to/project",
+    "openLocalPathGo": "Go",
+    "openLocalOpenHere": "Open this folder",
+    "openLocalUp": "Parent directory",
+    "openLocalPathRequired": "Please enter a directory path.",
+    "openLocalFailed": "Could not open this project. Please verify the path exists."
   },
   "app": {
     "title": "CloudCLI",
@@ -67,6 +75,7 @@
     "clearSearch": "Clear search",
     "openRemoteClaudeProject": "Run claudecode / claude in the project directory on the remote (same as local cd + -p). See server log for full output.",
     "openRemoteByPath": "Open a project by absolute path (browse on remote or paste path)",
+    "openLocalByPath": "Open a local project by path (browse or paste path)",
     "openClaudeMdRemote": "Append or create CLAUDE.md in this project’s root on the remote host"
   },
   "navigation": {

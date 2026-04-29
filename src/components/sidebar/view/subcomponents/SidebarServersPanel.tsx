@@ -129,10 +129,8 @@ export default function SidebarServersPanel({ t }: { t: TFunction }) {
     setLoading(true);
     try {
       const [listRes, groupsRes] = await Promise.all([api.sshServers.list(), api.sshServers.listGroups()]);
-      console.info('[ssh-servers/ui] load: list status=', listRes.status, 'groups status=', groupsRes.status);
       if (!listRes.ok) {
         const errText = await listRes.text().catch(() => '');
-        console.warn('[ssh-servers/ui] load: list failed body=', errText.slice(0, 200));
         throw new Error(`HTTP ${listRes.status}`);
       }
       const data = (await listRes.json()) as { servers: SshServerRow[]; vaultConfigured: boolean };
@@ -141,24 +139,10 @@ export default function SidebarServersPanel({ t }: { t: TFunction }) {
       if (groupsRes.ok) {
         const list = (await groupsRes.json()) as SshGroupRow[];
         setGroups(list);
-        console.info(
-          '[ssh-servers/ui] load: groups count=',
-          list.length,
-          'rows=',
-          list.map((g) => ({ id: g.id, name: g.name })),
-        );
       } else {
         setGroups([]);
-        const errText = await groupsRes.text().catch(() => '');
-        console.warn(
-          '[ssh-servers/ui] load: GET /groups failed status=',
-          groupsRes.status,
-          'body=',
-          errText.slice(0, 300),
-        );
       }
     } catch (e) {
-      console.error('[ssh-servers/ui] load error:', e);
       setError(e instanceof Error ? e.message : 'load failed');
     } finally {
       setLoading(false);
@@ -178,7 +162,6 @@ export default function SidebarServersPanel({ t }: { t: TFunction }) {
     }
     setSavingGroup(true);
     try {
-      console.info('[ssh-servers/ui] createGroup: name=', name);
       const res = await api.sshServers.createGroup(name);
       if (!res.ok) {
         const errBody = await res.text().catch(() => '');
@@ -188,25 +171,14 @@ export default function SidebarServersPanel({ t }: { t: TFunction }) {
         } catch {
           /* 非 JSON */
         }
-        console.warn(
-          '[ssh-servers/ui] createGroup failed status=',
-          res.status,
-          'body=',
-          errBody.slice(0, 400),
-          'parsed=',
-          j,
-        );
         setError(j.error || t('sshServers.groupCreateFailed'));
         return;
       }
-      const created = (await res.json().catch(() => ({}))) as { id?: number; name?: string; sort_order?: number };
-      console.info('[ssh-servers/ui] createGroup: success payload=', created);
       setGroupDialogOpen(false);
       setNewGroupName('');
       setTestMessage(t('sshServers.groupCreatedOk'));
       await load();
     } catch (e) {
-      console.error('[ssh-servers/ui] createGroup: exception', e);
       setError(e instanceof Error ? e.message : t('sshServers.groupCreateFailed'));
     } finally {
       setSavingGroup(false);
@@ -276,9 +248,6 @@ export default function SidebarServersPanel({ t }: { t: TFunction }) {
     setTestMessage(null);
     setError(null);
     const meta = servers.find((s) => s.id === id);
-    const t0 = typeof performance !== 'undefined' ? performance.now() : 0;
-    const url = `/api/ssh-servers/${id}/test`;
-    console.info('[ssh-test/ui] 开始测试连接', { serverId: id, url, display: meta?.display_name, host: meta?.host, port: meta?.port });
     try {
       const res = await api.sshServers.test(id);
       const raw = await res.text();
@@ -291,23 +260,13 @@ export default function SidebarServersPanel({ t }: { t: TFunction }) {
       try {
         j = raw ? (JSON.parse(raw) as typeof j) : {};
       } catch {
-        console.warn('[ssh-test/ui] 响应非 JSON, raw=', raw.slice(0, 500));
+        /* 非 JSON 响应 */
       }
-      const ms = typeof performance !== 'undefined' ? Math.round(performance.now() - t0) : undefined;
       if (!res.ok) {
         const detail = j.error || raw.slice(0, 300) || `HTTP ${res.status}`;
         const codePart = j.code ? ` [${j.code}]` : '';
-        console.error('[ssh-test/ui] 测试失败', {
-          serverId: id,
-          httpStatus: res.status,
-          ms,
-          code: j.code,
-          error: j.error,
-          bodyPreview: raw.slice(0, 400),
-        });
         throw new Error(`${detail}${codePart}`);
       }
-      console.info('[ssh-test/ui] 测试成功', { serverId: id, ms, hostKeyFp: j.hostKeyFingerprintSha256 });
       setTestMessage(
         j.hostKeyFingerprintSha256
           ? t('sshServers.testOkWithFp', { fp: j.hostKeyFingerprintSha256 })
@@ -340,7 +299,6 @@ export default function SidebarServersPanel({ t }: { t: TFunction }) {
     } catch (e) {
       const msg = e instanceof Error ? e.message : 'test failed';
       setError(msg);
-      console.error('[ssh-test/ui] 异常', { serverId: id, message: msg, err: e });
     } finally {
       setBusyId(null);
     }

@@ -83,9 +83,15 @@ export function TaskMasterProvider({ children }: { children: React.ReactNode }) 
     setError(null);
   }, []);
 
-  const handleError = useCallback((context: string, caughtError: unknown) => {
-    console.error(`TaskMaster ${context} error:`, caughtError);
-    setError(createTaskMasterError(context, caughtError));
+  const handleError = useCallback((context: string, caughtError: unknown, silent = false) => {
+    // 404 错误静默处理（后端服务未启动或 API 不存在）
+    const is404 = caughtError instanceof Error && caughtError.message.includes('404');
+    if (!silent && !is404) {
+      console.error(`TaskMaster ${context} error:`, caughtError);
+    }
+    if (!is404) {
+      setError(createTaskMasterError(context, caughtError));
+    }
   }, []);
 
   const setCurrentProject = useCallback((project: TaskMasterProjectInput) => {
@@ -132,7 +138,8 @@ export function TaskMasterProvider({ children }: { children: React.ReactNode }) 
       setCurrentProjectState(matchingProject);
       setProjectTaskMaster(matchingProject?.taskmaster ?? null);
     } catch (caughtError) {
-      handleError('load projects', caughtError);
+      // 404 错误静默处理（后端服务未启动）
+      handleError('load projects', caughtError, true);
     } finally {
       setIsLoading(false);
     }

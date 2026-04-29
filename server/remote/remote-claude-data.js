@@ -682,11 +682,22 @@ export async function deleteRemoteClaudeSession(userId, serverId, projectName, s
       if (!Buffer.isBuffer(buf) || !buf.length) {
         continue;
       }
+
+      // 对于大文件，只检查文件名是否匹配 session ID（文件名格式：sessionId.jsonl）
+      // 如果匹配，直接删除整个文件
       if (buf.length > MAX_FILE_BYTES) {
-        const err = new Error('Session file too large to modify');
-        /** @type {any} */ (err).code = 'REMOTE_SESSION_FILE_TOO_LARGE';
-        throw err;
+        const fileNameWithoutExt = file.replace(/\.jsonl$/, '');
+        if (fileNameWithoutExt === sid) {
+          // 文件名匹配 session ID，直接删除文件
+          await new Promise((resolve, reject) => {
+            sftp.unlink(jsonlFile, (e) => (e ? reject(e) : resolve()));
+          });
+          return true;
+        }
+        // 文件名不匹配且文件太大，跳过这个文件继续检查其他文件
+        continue;
       }
+
       const content = buf.toString('utf8');
       const lines = content.split('\n').filter((line) => line.trim());
 

@@ -16,6 +16,7 @@ import SidebarContent from './subcomponents/SidebarContent';
 import SidebarModals from './subcomponents/SidebarModals';
 import type { SidebarProjectListProps } from './subcomponents/SidebarProjectList';
 import OpenRemoteProjectDialog from './subcomponents/OpenRemoteProjectDialog';
+import OpenLocalProjectDialog from './subcomponents/OpenLocalProjectDialog';
 import ProjectClaudeMdRemoteModal from './subcomponents/ProjectClaudeMdRemoteModal';
 
 type TaskMasterSidebarContext = {
@@ -59,6 +60,7 @@ function Sidebar({
   const [remoteClaudeOpenBusyName, setRemoteClaudeOpenBusyName] = useState<string | null>(null);
   const [claudeMdProject, setClaudeMdProject] = useState<Project | null>(null);
   const [openRemotePathDialog, setOpenRemotePathDialog] = useState(false);
+  const [openLocalPathDialog, setOpenLocalPathDialog] = useState(false);
   const handleOpenRemoteClaudeProject = useCallback(
     async (project: Project) => {
       if (!isRemote || currentTarget.kind !== 'remote' || !project?.__cloudcliRemote) {
@@ -85,6 +87,12 @@ function Sidebar({
   );
 
   const onAfterRemotePathOpen = useCallback(() => {
+    if (window.refreshProjects) {
+      void window.refreshProjects();
+    }
+  }, []);
+
+  const onAfterLocalPathOpen = useCallback(() => {
     if (window.refreshProjects) {
       void window.refreshProjects();
     }
@@ -282,6 +290,15 @@ function Sidebar({
         />
       )}
 
+      {!isRemote && (
+        <OpenLocalProjectDialog
+          open={openLocalPathDialog}
+          onOpenChange={setOpenLocalPathDialog}
+          onSuccess={onAfterLocalPathOpen}
+          t={t}
+        />
+      )}
+
       {isSidebarCollapsed ? (
         <SidebarCollapsed
           onExpand={handleExpandSidebar}
@@ -341,6 +358,7 @@ function Sidebar({
             createProjectDisabled={isRemote}
             onCreateProject={() => setShowNewProject(true)}
             onOpenRemoteProjectByPath={() => setOpenRemotePathDialog(true)}
+            onOpenLocalProjectByPath={() => setOpenLocalPathDialog(true)}
             onCollapseSidebar={handleCollapseSidebar}
             updateAvailable={updateAvailable}
             releaseInfo={releaseInfo}

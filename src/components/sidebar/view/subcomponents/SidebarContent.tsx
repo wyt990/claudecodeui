@@ -67,6 +67,7 @@ type SidebarContentProps = {
   remoteWorkspaceLabel?: string | null;
   createProjectDisabled?: boolean;
   onOpenRemoteProjectByPath?: () => void;
+  onOpenLocalProjectByPath?: () => void;
   t: TFunction;
 };
 
@@ -100,6 +101,7 @@ export default function SidebarContent({
   remoteWorkspaceLabel = null,
   createProjectDisabled = false,
   onOpenRemoteProjectByPath,
+  onOpenLocalProjectByPath,
   t,
 }: SidebarContentProps) {
   const showConversationSearch = searchMode === 'conversations' && searchFilter.trim().length >= 2;
@@ -125,6 +127,7 @@ export default function SidebarContent({
         onCreateProject={onCreateProject}
         createProjectDisabled={createProjectDisabled}
         onOpenRemoteProjectByPath={onOpenRemoteProjectByPath}
+        onOpenLocalProjectByPath={onOpenLocalProjectByPath}
         isRemoteContext={isRemoteContext}
         onCollapseSidebar={onCollapseSidebar}
         t={t}

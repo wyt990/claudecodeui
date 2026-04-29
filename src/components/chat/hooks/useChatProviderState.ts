@@ -155,8 +155,8 @@ export function useChatProviderState({
             applyModelsFromRemote(data);
           }
         }
-      } catch {
-        /* optional gateway / claudecode / ssh */
+      } catch (err) {
+        // Silently fail - fallback to built-in models
       }
     })();
 

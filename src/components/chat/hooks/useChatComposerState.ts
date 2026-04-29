@@ -951,8 +951,12 @@ export function useChatComposerState({
       type: 'abort-session',
       sessionId: targetSessionId,
       provider,
+      // 远程 SSH 会话需要此参数
+      ...(isRemote && provider === 'claude' && currentTarget.kind === 'remote'
+        ? { useRemoteSsh: true }
+        : {}),
     });
-  }, [canAbortSession, currentSessionId, isRemote, pendingViewSessionRef, provider, selectedSession?.id, sendMessage]);
+  }, [canAbortSession, currentSessionId, isRemote, pendingViewSessionRef, provider, selectedSession?.id, sendMessage, currentTarget]);
 
   const handleGrantToolPermission = useCallback(
     async (suggestion: { entry: string; toolName: string }) => {

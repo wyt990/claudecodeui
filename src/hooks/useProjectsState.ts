@@ -160,11 +160,25 @@ export function useProjectsState({
   const targetKeyHandledRef = useRef<string | null>(null);
 
   const fetchProjects = useCallback(async ({ showLoadingState = true }: FetchProjectsOptions = {}) => {
+    let loadingTimeout: ReturnType<typeof setTimeout> | null = null;
+
     try {
       if (showLoadingState) {
         setIsLoadingProjects(true);
+        // 设置超时保护，确保即使请求卡住也会解除加载状态
+        loadingTimeout = setTimeout(() => {
+          setIsLoadingProjects(false);
+          console.warn('[useProjectsState] fetchProjects timeout, forced loading state reset');
+        }, 30000); // 30秒超时
       }
+
       const response = await api.projects();
+
+      if (loadingTimeout) {
+        clearTimeout(loadingTimeout);
+        loadingTimeout = null;
+      }
+
       if (response.status === 501) {
         setProjects([]);
         return;
@@ -189,8 +203,16 @@ export function useProjectsState({
           : prevProjects;
       });
     } catch (error) {
-      console.error('Error fetching projects:', error);
+      // 404 错误静默处理（后端服务未启动）
+      const is404 = error instanceof Error && error.message.includes('404');
+      if (!is404) {
+        console.error('Error fetching projects:', error);
+      }
     } finally {
+      if (loadingTimeout) {
+        clearTimeout(loadingTimeout);
+        loadingTimeout = null;
+      }
       if (showLoadingState) {
         setIsLoadingProjects(false);
       }

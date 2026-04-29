@@ -34,7 +34,15 @@
     "browseLoading": "加载中…",
     "claudeMdRemoteTitle": "远程项目 CLAUDE.md：{{name}}",
     "claudeMdRemotePathHint": "已自动使用该远程项目目录，无需再手填路径。",
-    "claudeMdRemoteBody": "在仓库根目录对 CLAUDE.md 追加带标记的一段（若无则新建）。也可将常用片段存为下方模板。"
+    "claudeMdRemoteBody": "在仓库根目录对 CLAUDE.md 追加带标记的一段（若无则新建）。也可将常用片段存为下方模板。",
+    "openLocalPathDialogTitle": "打开本地项目",
+    "openLocalPathDialogHint": "输入本地目录路径或浏览目录后打开。添加到项目列表后即可在该 UI 中管理。",
+    "openLocalPathPlaceholder": "例如 /home/用户/项目",
+    "openLocalPathGo": "前往",
+    "openLocalOpenHere": "打开此目录",
+    "openLocalUp": "上级目录",
+    "openLocalPathRequired": "请输入目录路径。",
+    "openLocalFailed": "无法打开该项目。请检查路径是否存在。"
   },
   "app": {
     "title": "CloudCLI",
@@ -67,6 +75,7 @@
     "clearSearch": "清除搜索",
     "openRemoteClaudeProject": "在远程进入该项目目录并执行 claudecode / claude 的 -p 启动（与本地 cd 后行为一致），完整输出见服务端日志",
     "openRemoteByPath": "按绝对路径打开项目（可浏览远程目录或粘贴路径）",
+    "openLocalByPath": "按路径打开本地项目（可浏览目录或粘贴路径）",
     "openClaudeMdRemote": "在此远程项目根目录追加或新建 CLAUDE.md"
   },
   "navigation": {

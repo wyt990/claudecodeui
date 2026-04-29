@@ -94,14 +94,13 @@ export function verifyEnvExportAgainstExpectations(text, expect) {
  * @returns {Promise<{ raw: string, models: { id: string, label: string }[], defaultModelId: string | null, parseError: string | null, code: number | null, stderr: string }>}
  */
 export async function runRemoteClaudecodeListModels(userId, serverId) {
+  // Use text format for remote SSH (older claudecode versions may not support --json)
+  // The parser will try JSON first if the output looks like JSON, then fall back to text
   const cmd = 'export NO_COLOR=1 FORCE_COLOR=0; claudecode --list-models';
   const { client, release } = await acquirePooledSshClient(userId, serverId);
   try {
     const r = await execBashTextResult(userId, serverId, client, cmd, LIST_TIMEOUT_MS, USE_INTERACTIVE_BASH);
     const raw = (r.stdout || '') + (r.stderr && r.stderr.length ? (r.stdout ? '\n' : '') + r.stderr : '');
-    // console.log(
-    //  `${LOG} userId=${userId} serverId=${serverId} step=list-models code=${r.code} outLen=${(r.stdout || '').length} errLen=${(r.stderr || '').length}`,
-    // );
     if (r.timedOut) {
       return { raw, models: [], defaultModelId: null, parseError: 'Remote list-models timed out', code: r.code, stderr: r.stderr || '' };
     }
