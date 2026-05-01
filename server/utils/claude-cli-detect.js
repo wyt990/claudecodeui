@@ -9,7 +9,7 @@ import { isClaudeOpenAICompatMode } from './claude-openai-env.js';
  */
 export function commandExists(command) {
   try {
-    const result = spawnSync('bash', ['-lc', `which ${command}`], {
+    const result = spawnSync('bash', ['-lic', `command -v ${command} >/dev/null 2>&1`], {
       stdio: 'pipe',
       timeout: 5000,
       env: process.env
@@ -22,7 +22,7 @@ export function commandExists(command) {
 
 function whichAbsolute(command) {
   try {
-    const result = spawnSync('bash', ['-lc', `command -v ${command} 2>/dev/null`], {
+    const result = spawnSync('bash', ['-lic', `command -v ${command} 2>/dev/null`], {
       encoding: 'utf8',
       stdio: ['ignore', 'pipe', 'ignore'],
       timeout: 5000,
@@ -38,13 +38,53 @@ function whichAbsolute(command) {
   return null;
 }
 
+function fromConfiguredPathFor(command) {
+  if (command === 'claude') {
+    const p = process.env.CLAUDE_CLI_PATH?.trim();
+    if (p && fs.existsSync(p)) {
+      return p;
+    }
+    return null;
+  }
+
+  if (command === 'claudecode') {
+    const explicit = process.env.CLAUDE_CODE_EXECUTABLE?.trim();
+    if (explicit && fs.existsSync(explicit)) {
+      return explicit;
+    }
+
+    const root = process.env.CLAUDE_CODE_ROOT?.trim();
+    if (root) {
+      const candidate = path.join(root, 'bin', 'claudecode');
+      if (fs.existsSync(candidate)) {
+        return candidate;
+      }
+    }
+
+    const defaultFork = '/apps/claude-code/bin/claudecode';
+    if (fs.existsSync(defaultFork)) {
+      return defaultFork;
+    }
+  }
+
+  return null;
+}
+
 /** Prefer `preferred` if present, else `fallback` (same as PTY shell for Claude). */
 export function getCliCommand(preferred, fallback) {
   if (commandExists(preferred)) {
     return preferred;
   }
+  const preferredConfigured = fromConfiguredPathFor(preferred);
+  if (preferredConfigured) {
+    return preferredConfigured;
+  }
   if (commandExists(fallback)) {
     return fallback;
+  }
+  const fallbackConfigured = fromConfiguredPathFor(fallback);
+  if (fallbackConfigured) {
+    return fallbackConfigured;
   }
   return null;
 }
@@ -68,6 +108,14 @@ export function getCliCommandForPriority(order) {
     if (commandExists(cmd)) {
       return cmd;
     }
+    const fromConfig = fromConfiguredPathFor(cmd);
+    if (fromConfig) {
+      return fromConfig;
+    }
+    const abs = whichAbsolute(cmd);
+    if (abs) {
+      return abs;
+    }
   }
   return null;
 }
@@ -86,8 +134,8 @@ export function getClaudeShellBinaryResolution() {
   const command = getCliCommandForPriority(order);
   return {
     command,
-    claudeAvailable: commandExists('claude'),
-    claudecodeAvailable: commandExists('claudecode'),
+    claudeAvailable: Boolean(commandExists('claude') || fromConfiguredPathFor('claude') || whichAbsolute('claude')),
+    claudecodeAvailable: Boolean(commandExists('claudecode') || fromConfiguredPathFor('claudecode') || whichAbsolute('claudecode')),
     resolutionOrder: order,
     chatUses: 'claude-agent-sdk',
     openAICompat: isClaudeOpenAICompatMode()

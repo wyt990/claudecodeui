@@ -36,6 +36,11 @@ export default function ClaudeShellBinaryBadge() {
   }, []);
 
   const command = info?.command ?? null;
+  const shouldHideBadge = Boolean(command);
+
+  if (shouldHideBadge) {
+    return null;
+  }
 
   return (
     <span

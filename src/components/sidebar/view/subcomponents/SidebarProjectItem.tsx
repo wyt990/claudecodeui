@@ -153,178 +153,168 @@ export default function SidebarProjectItem({
             )}
             onClick={toggleProject}
           >
-            <div className="flex items-center justify-between">
-              <div className="flex min-w-0 flex-1 items-center gap-3">
-                <div
-                  className={cn(
-                    'w-8 h-8 rounded-lg flex items-center justify-center transition-colors',
-                    isExpanded ? 'bg-primary/10' : 'bg-muted',
-                  )}
-                >
-                  {isExpanded ? (
-                    <FolderOpen className="h-4 w-4 text-primary" />
-                  ) : (
-                    <Folder className="h-4 w-4 text-muted-foreground" />
-                  )}
-                </div>
-
-                <div className="min-w-0 flex-1">
-                  {isEditing ? (
-                    <input
-                      type="text"
-                      value={editingName}
-                      onChange={(event) => onEditingNameChange(event.target.value)}
-                      className="w-full rounded-lg border-2 border-primary/40 bg-background px-3 py-2 text-sm text-foreground shadow-sm transition-all duration-200 focus:border-primary focus:shadow-md focus:outline-none"
-                      placeholder={t('projects.projectNamePlaceholder')}
-                      autoFocus
-                      autoComplete="off"
-                      onClick={(event) => event.stopPropagation()}
-                      onKeyDown={(event) => {
-                        if (event.key === 'Enter') {
-                          saveProjectName();
-                        }
-
-                        if (event.key === 'Escape') {
-                          onCancelEditingProject();
-                        }
-                      }}
-                      style={{
-                        fontSize: '16px',
-                        WebkitAppearance: 'none',
-                        borderRadius: '8px',
-                      }}
-                    />
-                  ) : (
-                    <>
-                      <div className="flex min-w-0 flex-1 items-center justify-between gap-2">
-                        <h3 className="min-w-0 flex-1 truncate text-sm font-medium text-foreground" title={project.displayName}>
-                          {project.displayName}
-                        </h3>
-                        {tasksEnabled && (
-                          <TaskIndicator
-                            status={taskStatus}
-                            size="xs"
-                            className="ml-2 hidden flex-shrink-0 md:inline-flex"
-                          />
-                        )}
-                      </div>
-                      <p className="text-xs text-muted-foreground">{sessionCountLabel}</p>
-                    </>
-                  )}
-                </div>
+            <div className="flex min-w-0 items-start gap-3">
+              <div
+                className={cn(
+                  'w-8 h-8 rounded-lg flex items-center justify-center transition-colors',
+                  isExpanded ? 'bg-primary/10' : 'bg-muted',
+                )}
+              >
+                {isExpanded ? (
+                  <FolderOpen className="h-4 w-4 text-primary" />
+                ) : (
+                  <Folder className="h-4 w-4 text-muted-foreground" />
+                )}
               </div>
 
-              <div className="flex items-center gap-1">
+              <div className="min-w-0 flex-1">
                 {isEditing ? (
-                  <>
-                    <button
-                      className="flex h-8 w-8 items-center justify-center rounded-lg bg-green-500 shadow-sm transition-all duration-150 active:scale-90 active:shadow-none dark:bg-green-600"
-                      onClick={(event) => {
-                        event.stopPropagation();
+                  <input
+                    type="text"
+                    value={editingName}
+                    onChange={(event) => onEditingNameChange(event.target.value)}
+                    className="w-full rounded-lg border-2 border-primary/40 bg-background px-3 py-2 text-sm text-foreground shadow-sm transition-all duration-200 focus:border-primary focus:shadow-md focus:outline-none"
+                    placeholder={t('projects.projectNamePlaceholder')}
+                    autoFocus
+                    autoComplete="off"
+                    onClick={(event) => event.stopPropagation()}
+                    onKeyDown={(event) => {
+                      if (event.key === 'Enter') {
                         saveProjectName();
-                      }}
-                    >
-                      <Check className="h-4 w-4 text-white" />
-                    </button>
-                    <button
-                      className="flex h-8 w-8 items-center justify-center rounded-lg bg-gray-500 shadow-sm transition-all duration-150 active:scale-90 active:shadow-none dark:bg-gray-600"
-                      onClick={(event) => {
-                        event.stopPropagation();
+                      }
+
+                      if (event.key === 'Escape') {
                         onCancelEditingProject();
-                      }}
-                    >
-                      <X className="h-4 w-4 text-white" />
-                    </button>
-                  </>
+                      }
+                    }}
+                    style={{
+                      fontSize: '16px',
+                      WebkitAppearance: 'none',
+                      borderRadius: '8px',
+                    }}
+                  />
                 ) : (
                   <>
-                    <button
-                      className={cn(
-                        'w-8 h-8 rounded-lg flex items-center justify-center active:scale-90 transition-all duration-150 border',
-                        isStarred
-                          ? 'bg-yellow-500/10 dark:bg-yellow-900/30 border-yellow-200 dark:border-yellow-800'
-                          : 'bg-gray-500/10 dark:bg-gray-900/30 border-gray-200 dark:border-gray-800',
-                      )}
-                      onClick={(event) => {
-                        event.stopPropagation();
-                        toggleStarProject();
-                      }}
-                      title={isStarred ? t('tooltips.removeFromFavorites') : t('tooltips.addToFavorites')}
-                    >
-                      <Star
-                        className={cn(
-                          'w-4 h-4 transition-colors',
-                          isStarred
-                            ? 'text-yellow-600 dark:text-yellow-400 fill-current'
-                            : 'text-gray-600 dark:text-gray-400',
-                        )}
-                      />
-                    </button>
-
-                    {canOpenRemote && !isEditing && (
-                      <button
-                        type="button"
-                        className="flex h-8 min-h-8 w-8 min-w-8 shrink-0 items-center justify-center rounded-lg border border-emerald-200 bg-emerald-500/10 active:scale-90 dark:border-emerald-800 dark:bg-emerald-900/30"
-                        onClick={(event) => {
-                          event.stopPropagation();
-                          void onOpenRemoteClaudeProject?.(project);
-                        }}
-                        disabled={remoteOpenBusy}
-                        title={t('tooltips.openRemoteClaudeProject')}
-                        aria-label={t('tooltips.openRemoteClaudeProject')}
-                      >
-                        {remoteOpenBusy ? (
-                          <Loader2 className="h-4 w-4 animate-spin text-emerald-600 dark:text-emerald-400" />
+                    <div className="flex min-w-0 items-center justify-between gap-2">
+                      <h3 className="min-w-0 flex-1 truncate text-sm font-medium text-foreground" title={project.displayName}>
+                        {project.displayName}
+                      </h3>
+                      <div className="flex h-6 w-6 flex-shrink-0 items-center justify-center rounded-md bg-muted/30">
+                        {isExpanded ? (
+                          <ChevronDown className="h-3 w-3 text-muted-foreground" />
                         ) : (
-                          <PlayCircle className="h-4 w-4 text-emerald-600 dark:text-emerald-400" />
+                          <ChevronRight className="h-3 w-3 text-muted-foreground" />
                         )}
-                      </button>
-                    )}
-                    {canClaudeMd && !isEditing && (
-                      <button
-                        type="button"
-                        className="flex h-8 min-h-8 w-8 min-w-8 shrink-0 items-center justify-center rounded-lg border border-sky-200 bg-sky-500/10 active:scale-90 dark:border-sky-800 dark:bg-sky-900/30"
-                        onClick={(event) => {
-                          event.stopPropagation();
-                          onOpenClaudeMdRemote?.(project);
-                        }}
-                        title={t('tooltips.openClaudeMdRemote')}
-                        aria-label={t('tooltips.openClaudeMdRemote')}
-                      >
-                        <FileText className="h-4 w-4 text-sky-600 dark:text-sky-400" />
-                      </button>
-                    )}
-
-                    <button
-                      className="flex h-8 w-8 items-center justify-center rounded-lg border border-red-200 bg-red-500/10 active:scale-90 dark:border-red-800 dark:bg-red-900/30"
-                      onClick={(event) => {
-                        event.stopPropagation();
-                        onDeleteProject(project);
-                      }}
-                    >
-                      <Trash2 className="h-4 w-4 text-red-600 dark:text-red-400" />
-                    </button>
-
-                    <button
-                      className="flex h-8 w-8 items-center justify-center rounded-lg border border-primary/20 bg-primary/10 active:scale-90 dark:border-primary/30 dark:bg-primary/20"
-                      onClick={(event) => {
-                        event.stopPropagation();
-                        onStartEditingProject(project);
-                      }}
-                    >
-                      <Edit3 className="h-4 w-4 text-primary" />
-                    </button>
-
-                    <div className="flex h-6 w-6 items-center justify-center rounded-md bg-muted/30">
-                      {isExpanded ? (
-                        <ChevronDown className="h-3 w-3 text-muted-foreground" />
-                      ) : (
-                        <ChevronRight className="h-3 w-3 text-muted-foreground" />
-                      )}
+                      </div>
                     </div>
+                    <p className="text-xs text-muted-foreground">{sessionCountLabel}</p>
                   </>
                 )}
               </div>
+            </div>
+
+            <div className="mt-2 flex items-center justify-end gap-1">
+              {isEditing ? (
+                <>
+                  <button
+                    className="flex h-8 w-8 items-center justify-center rounded-lg bg-green-500 shadow-sm transition-all duration-150 active:scale-90 active:shadow-none dark:bg-green-600"
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      saveProjectName();
+                    }}
+                  >
+                    <Check className="h-4 w-4 text-white" />
+                  </button>
+                  <button
+                    className="flex h-8 w-8 items-center justify-center rounded-lg bg-gray-500 shadow-sm transition-all duration-150 active:scale-90 active:shadow-none dark:bg-gray-600"
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      onCancelEditingProject();
+                    }}
+                  >
+                    <X className="h-4 w-4 text-white" />
+                  </button>
+                </>
+              ) : (
+                <>
+                  <button
+                    className={cn(
+                      'w-8 h-8 rounded-lg flex items-center justify-center active:scale-90 transition-all duration-150 border',
+                      isStarred
+                        ? 'bg-yellow-500/10 dark:bg-yellow-900/30 border-yellow-200 dark:border-yellow-800'
+                        : 'bg-gray-500/10 dark:bg-gray-900/30 border-gray-200 dark:border-gray-800',
+                    )}
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      toggleStarProject();
+                    }}
+                    title={isStarred ? t('tooltips.removeFromFavorites') : t('tooltips.addToFavorites')}
+                  >
+                    <Star
+                      className={cn(
+                        'w-4 h-4 transition-colors',
+                        isStarred
+                          ? 'text-yellow-600 dark:text-yellow-400 fill-current'
+                          : 'text-gray-600 dark:text-gray-400',
+                      )}
+                    />
+                  </button>
+
+                  {canOpenRemote && !isEditing && (
+                    <button
+                      type="button"
+                      className="flex h-8 min-h-8 w-8 min-w-8 shrink-0 items-center justify-center rounded-lg border border-emerald-200 bg-emerald-500/10 active:scale-90 dark:border-emerald-800 dark:bg-emerald-900/30"
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        void onOpenRemoteClaudeProject?.(project);
+                      }}
+                      disabled={remoteOpenBusy}
+                      title={t('tooltips.openRemoteClaudeProject')}
+                      aria-label={t('tooltips.openRemoteClaudeProject')}
+                    >
+                      {remoteOpenBusy ? (
+                        <Loader2 className="h-4 w-4 animate-spin text-emerald-600 dark:text-emerald-400" />
+                      ) : (
+                        <PlayCircle className="h-4 w-4 text-emerald-600 dark:text-emerald-400" />
+                      )}
+                    </button>
+                  )}
+                  {canClaudeMd && !isEditing && (
+                    <button
+                      type="button"
+                      className="flex h-8 min-h-8 w-8 min-w-8 shrink-0 items-center justify-center rounded-lg border border-sky-200 bg-sky-500/10 active:scale-90 dark:border-sky-800 dark:bg-sky-900/30"
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        onOpenClaudeMdRemote?.(project);
+                      }}
+                      title={t('tooltips.openClaudeMdRemote')}
+                      aria-label={t('tooltips.openClaudeMdRemote')}
+                    >
+                      <FileText className="h-4 w-4 text-sky-600 dark:text-sky-400" />
+                    </button>
+                  )}
+
+                  <button
+                    className="flex h-8 w-8 items-center justify-center rounded-lg border border-red-200 bg-red-500/10 active:scale-90 dark:border-red-800 dark:bg-red-900/30"
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      onDeleteProject(project);
+                    }}
+                  >
+                    <Trash2 className="h-4 w-4 text-red-600 dark:text-red-400" />
+                  </button>
+
+                  <button
+                    className="flex h-8 w-8 items-center justify-center rounded-lg border border-primary/20 bg-primary/10 active:scale-90 dark:border-primary/30 dark:bg-primary/20"
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      onStartEditingProject(project);
+                    }}
+                  >
+                    <Edit3 className="h-4 w-4 text-primary" />
+                  </button>
+                </>
+              )}
             </div>
           </div>
         </div>
@@ -332,7 +322,7 @@ export default function SidebarProjectItem({
         <Button
           variant="ghost"
           className={cn(
-            'hidden md:grid h-auto w-full grid-cols-[minmax(0,1fr)_auto] items-center gap-2 p-2 font-normal hover:bg-accent/50',
+            'hidden md:flex h-auto w-full flex-col items-stretch gap-2 p-2 font-normal hover:bg-accent/50',
             isSelected && 'bg-accent text-accent-foreground',
             isStarred &&
               !isSelected &&
@@ -346,7 +336,7 @@ export default function SidebarProjectItem({
             ) : (
               <Folder className="h-4 w-4 flex-shrink-0 text-muted-foreground" />
             )}
-            <div className="min-w-0 text-left">
+            <div className="min-w-0 flex-1 text-left">
               {isEditing ? (
                 <div className="space-y-1">
                   <input
@@ -386,9 +376,18 @@ export default function SidebarProjectItem({
                 </div>
               )}
             </div>
+            {!isEditing && (
+              <div className="ml-2 flex h-5 w-5 flex-shrink-0 items-center justify-center rounded-md bg-muted/30">
+                {isExpanded ? (
+                  <ChevronDown className="h-3 w-3 text-muted-foreground transition-colors group-hover:text-foreground" />
+                ) : (
+                  <ChevronRight className="h-3 w-3 text-muted-foreground transition-colors group-hover:text-foreground" />
+                )}
+              </div>
+            )}
           </div>
 
-          <div className="flex w-max flex-shrink-0 items-center gap-1">
+          <div className="flex w-full items-center justify-end gap-1">
             {isEditing ? (
               <>
                 <div
@@ -503,11 +502,6 @@ export default function SidebarProjectItem({
                 >
                   <Trash2 className="h-3 w-3 text-red-600 dark:text-red-400" />
                 </div>
-                {isExpanded ? (
-                  <ChevronDown className="h-4 w-4 text-muted-foreground transition-colors group-hover:text-foreground" />
-                ) : (
-                  <ChevronRight className="h-4 w-4 text-muted-foreground transition-colors group-hover:text-foreground" />
-                )}
               </>
             )}
           </div>

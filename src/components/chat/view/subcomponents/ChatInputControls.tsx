@@ -46,13 +46,21 @@ export default function ChatInputControls({
 }: ChatInputControlsProps) {
   const { t } = useTranslation('chat');
   const claudeModelFieldLabel = t('input.claudeModel', { defaultValue: 'Model' });
+  const modeShortLabel =
+    permissionMode === 'default'
+      ? '默认'
+      : permissionMode === 'acceptEdits'
+        ? '编辑'
+        : permissionMode === 'bypassPermissions'
+          ? '无限制'
+          : '计划';
 
   return (
     <div className="flex flex-wrap items-center justify-center gap-2 sm:gap-3">
       <button
         type="button"
         onClick={onModeSwitch}
-        className={`rounded-lg border px-2.5 py-1 text-sm font-medium transition-all duration-200 sm:px-3 sm:py-1.5 ${
+        className={`rounded-lg border px-2 py-1 text-sm font-medium transition-all duration-200 max-sm:min-w-[4.5rem] sm:px-3 sm:py-1.5 ${
           permissionMode === 'default'
             ? 'border-border/60 bg-muted/50 text-muted-foreground hover:bg-muted'
             : permissionMode === 'acceptEdits'
@@ -76,10 +84,13 @@ export default function ChatInputControls({
             }`}
           />
           <span>
-            {permissionMode === 'default' && t('codex.modes.default')}
-            {permissionMode === 'acceptEdits' && t('codex.modes.acceptEdits')}
-            {permissionMode === 'bypassPermissions' && t('codex.modes.bypassPermissions')}
-            {permissionMode === 'plan' && t('codex.modes.plan')}
+            <span className="sm:hidden">{modeShortLabel}</span>
+            <span className="hidden sm:inline">
+              {permissionMode === 'default' && t('codex.modes.default')}
+              {permissionMode === 'acceptEdits' && t('codex.modes.acceptEdits')}
+              {permissionMode === 'bypassPermissions' && t('codex.modes.bypassPermissions')}
+              {permissionMode === 'plan' && t('codex.modes.plan')}
+            </span>
           </span>
         </div>
       </button>
@@ -97,7 +108,7 @@ export default function ChatInputControls({
             <select
               value={claudeModel}
               onChange={(event) => onClaudeModelChange(event.target.value)}
-              className="max-w-[min(100vw-8rem,220px)] cursor-pointer appearance-none rounded-lg border border-border/60 bg-muted/50 py-1 pl-2 pr-7 text-xs font-medium text-foreground transition-colors hover:bg-muted focus:outline-none focus:ring-2 focus:ring-primary/20 sm:max-w-[240px] sm:py-1.5 sm:pl-2.5 sm:text-sm"
+              className="max-w-[min(100vw-8rem,72px)] cursor-pointer appearance-none bg-none rounded-lg border border-border/60 bg-muted/50 py-1 pl-2 pr-7 text-xs font-medium text-foreground transition-colors hover:bg-muted focus:outline-none focus:ring-2 focus:ring-primary/20 sm:max-w-[240px] sm:py-1.5 sm:pl-2.5 sm:text-sm"
               title={claudeModelFieldLabel}
             >
               {claudeModelOptions.map((opt) => (
