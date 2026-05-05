@@ -202,6 +202,7 @@
     "claudeInstallNeedSecrets": "先にこのサーバーの SSH 認証情報を保存し、バックエンドの CLOUDCLI_VAULT_KEY を設定してください。",
     "claudeProbeFailed": "遠隔 Claude CLI の検出に失敗しました。",
     "claudeAlreadyInstalled": "Claude または claudecode が PATH 上にあり: {{path}}",
+    "claudeAlreadyInstalledHint": "再インストールまたは更新する場合は、下の「実行」をクリックしてください。",
     "claudeInstallDialogTitle": "遠隔に claudecode（コミュニティ版）をインストール",
     "claudeInstallDialogHint": "スクリプトは HTTPS 送信先ホストの allowlist から取得します。基準 URL や完全なコマンドを変更可ですが、サーバーの検証が必要です。",
     "claudeOsLabel": "OS",

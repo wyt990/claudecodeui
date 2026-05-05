@@ -80,9 +80,10 @@ export default function SidebarProjectsFileView({
       {!showList ? (
         state
       ) : (
-        <ScrollArea className="min-h-0 flex-1">
-          <div className="space-y-1 pr-1 pb-2">
-            {filteredProjects.map((project) => {
+        <>
+          <ScrollArea className="min-h-0 flex-1">
+            <div className="space-y-1 pr-1 pb-2">
+              {filteredProjects.map((project) => {
               const treeOpen = expandedForTree === project.name;
               const isSelected = selectedProject?.name === project.name;
               const starred = isProjectStarred(project.name);
@@ -175,8 +176,10 @@ export default function SidebarProjectsFileView({
                 </div>
               );
             })}
-          </div>
-        </ScrollArea>
+            </div>
+          </ScrollArea>
+          {state}
+        </>
       )}
     </div>
   );

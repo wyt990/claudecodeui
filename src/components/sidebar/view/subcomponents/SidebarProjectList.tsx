@@ -128,7 +128,9 @@ export default function SidebarProjectList({
     <div className="pb-safe-area-inset-bottom md:space-y-1">
       {!showProjects
         ? state
-        : filteredProjects.map((project) => (
+        : (
+          <>
+            {filteredProjects.map((project) => (
             <SidebarProjectItem
               key={project.name}
               project={project}
@@ -169,6 +171,9 @@ export default function SidebarProjectList({
               onOpenClaudeMdRemote={onOpenClaudeMdRemote}
             />
           ))}
+            {state}
+          </>
+        )}
     </div>
   );
 }

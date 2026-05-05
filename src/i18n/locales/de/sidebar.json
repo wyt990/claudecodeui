@@ -206,6 +206,7 @@
     "claudeInstallNeedSecrets": "SSH-Zugangsdaten speichern, CLOUDCLI_VAULT_KEY setzen.",
     "claudeProbeFailed": "Fern-Probe fehlgeschlagen.",
     "claudeAlreadyInstalled": "Bereits in PATH: {{path}}",
+    "claudeAlreadyInstalledHint": "Für Neuinstallation oder Update klicken Sie unten auf \"Ausführen\".",
     "claudeInstallDialogTitle": "claudecode (community) per SSH installieren",
     "claudeInstallDialogHint": "Skript per HTTPS, Host-Allowlist, Befehlserkennung am Server.",
     "claudeOsLabel": "OS",

@@ -210,6 +210,7 @@
     "claudeInstallNeedSecrets": "Save SSH credentials first; configure CLOUDCLI_VAULT_KEY.",
     "claudeProbeFailed": "Failed to probe remote for Claude CLI.",
     "claudeAlreadyInstalled": "On PATH: {{path}}",
+    "claudeAlreadyInstalledHint": "Для переустановки или обновления нажмите \"Выполнить\" ниже.",
     "claudeInstallDialogTitle": "Install claudecode (community) remotely",
     "claudeInstallDialogHint": "Script is fetched over HTTPS; host allowlist; command is validated on server.",
     "claudeOsLabel": "OS",

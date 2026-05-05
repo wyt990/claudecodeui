@@ -215,6 +215,7 @@
     "claudeInstallNeedSecrets": "Save SSH credentials and configure vault before using remote CLI setup.",
     "claudeProbeFailed": "Failed to probe remote for Claude CLI.",
     "claudeAlreadyInstalled": "Claude or claudecode is already on PATH: {{path}}",
+    "claudeAlreadyInstalledHint": "To reinstall or update, click \"Run on remote\" below.",
     "claudeInstallDialogTitle": "Install claudecode (community) on the remote",
     "claudeInstallDialogHint": "The script is loaded over HTTPS from an allowlisted host. You may change the base URL and review the full command; only matching templates are allowed for security. Admin can set CLOUDCLI_REMOTE_INSTALL_BASE_URL and CLOUDCLI_REMOTE_INSTALL_HOST_ALLOW.",
     "claudeOsLabel": "OS",

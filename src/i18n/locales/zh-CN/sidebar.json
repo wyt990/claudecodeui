@@ -215,6 +215,7 @@
     "claudeInstallNeedSecrets": "请先在侧栏中保存该服务器的 SSH 凭据，并配置后端的 CLOUDCLI_VAULT_KEY。",
     "claudeProbeFailed": "无法探测远程是否已安装 claude / claudecode。",
     "claudeAlreadyInstalled": "远端已能在 PATH 中找到：{{path}}",
+    "claudeAlreadyInstalledHint": "如需重新安装或更新版本，可点击下方「在远端执行」继续。",
     "claudeInstallDialogTitle": "在远端安装 claudecode（社区版）",
     "claudeInstallDialogHint": "安装脚本经 HTTPS 从可配置、白名单主机拉取。你可修改基址与命令，但服务端会校验，仅允许与模板一致的命令。管理端可设 CLOUDCLI_REMOTE_INSTALL_BASE_URL 与 CLOUDCLI_REMOTE_INSTALL_HOST_ALLOW。",
     "claudeOsLabel": "系统",

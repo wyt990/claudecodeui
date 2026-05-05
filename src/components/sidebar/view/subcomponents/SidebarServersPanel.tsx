@@ -108,6 +108,7 @@ export default function SidebarServersPanel({ t }: { t: TFunction }) {
   const [claudeInstall, setClaudeInstall] = useState<{
     server: SshServerRow;
     probe: ClaudeProbeRes;
+    alreadyInstalled?: boolean;
   } | null>(null);
   const [claudeMethod, setClaudeMethod] = useState<'curl' | 'wget' | 'pwsh'>('curl');
   const [claudeBaseOverride, setClaudeBaseOverride] = useState('');
@@ -360,18 +361,13 @@ export default function SidebarServersPanel({ t }: { t: TFunction }) {
         setError(j.error || t('sshServers.claudeProbeFailed'));
         return;
       }
-      if (j.hasCli) {
-        setTestMessage(
-          t('sshServers.claudeAlreadyInstalled', { path: j.claudecodePath || j.claudePath || 'PATH' }),
-        );
-        return;
-      }
       setClaudeBaseOverride(j.installBaseUrl);
       setClaudeMethod(j.installFamily === 'win' ? 'pwsh' : 'curl');
       setClaudeCmdDraft(
         j.installFamily === 'win' ? j.installCommands.pwsh : j.installCommands.curl,
       );
-      setClaudeInstall({ server: s, probe: j });
+      const alreadyInstalled = j.hasCli === true;
+      setClaudeInstall({ server: s, probe: j, alreadyInstalled });
     } finally {
       setClaudeProbingId(null);
     }
@@ -1010,6 +1006,16 @@ export default function SidebarServersPanel({ t }: { t: TFunction }) {
               <p id="ssh-claude-install-title" className="mb-1 text-sm font-medium text-foreground">
                 {t('sshServers.claudeInstallDialogTitle')}
               </p>
+              {claudeInstall.alreadyInstalled && (
+                <div className="mb-2 rounded-lg border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs text-amber-900 dark:text-amber-100">
+                  <p className="mb-2">
+                    {t('sshServers.claudeAlreadyInstalled', { path: claudeInstall.probe.claudecodePath || claudeInstall.probe.claudePath || 'PATH' })}
+                  </p>
+                  <p className="text-[10px] text-amber-700 dark:text-amber-300">
+                    {t('sshServers.claudeAlreadyInstalledHint')}
+                  </p>
+                </div>
+              )}
               <p className="mb-2 text-[10px] leading-relaxed text-muted-foreground">
                 {t('sshServers.claudeInstallDialogHint')}
               </p>
